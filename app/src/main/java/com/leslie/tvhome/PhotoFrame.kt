@@ -166,21 +166,22 @@ class FrameActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Prefs(this).systemScreensaver) { finish(); return }
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         main.postDelayed(releaseScreen, 4 * 3_600_000L)
         frame = SaverHost(this)
         setContentView(frame)
     }
 
-    override fun onResume() { super.onResume(); frame.start() }
-    override fun onPause() { frame.stop(); super.onPause() }
+    override fun onResume() { super.onResume(); if (::frame.isInitialized) frame.start() }
+    override fun onPause() { if (::frame.isInitialized) frame.stop(); super.onPause() }
     override fun onDestroy() { main.removeCallbacks(releaseScreen); super.onDestroy() }
 
     override fun dispatchKeyEvent(e: KeyEvent): Boolean = when (e.keyCode) {
         KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE,
-        KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_HOME -> super.dispatchKeyEvent(e)
+        KeyEvent.KEYCODE_POWER, KeyEvent.KEYCODE_HOME, KeyEvent.KEYCODE_MENU -> super.dispatchKeyEvent(e)
         else -> {
-            if (!frame.onKey(e) && e.action == KeyEvent.ACTION_UP) finish()
+            if ((!::frame.isInitialized || !frame.onKey(e)) && e.action == KeyEvent.ACTION_UP) finish()
             true
         }
     }
@@ -202,6 +203,7 @@ class PhotoDream : DreamService() {
 
     override fun onAttachedToWindow() {
         super.onAttachedToWindow()
+        if (Prefs(this).systemScreensaver) { finish(); return }
         val now = SystemClock.elapsedRealtime()
         val coversOurUi = ScreensaverScope.coversTigrisUi(now) || HomeForeground.dreamCoversHome(now)
         val decision = FrameIdlePolicy.dreamDecision(
@@ -227,6 +229,7 @@ class PhotoDream : DreamService() {
     }
 
     override fun dispatchKeyEvent(e: KeyEvent): Boolean {
+        if (e.keyCode == KeyEvent.KEYCODE_MENU) return super.dispatchKeyEvent(e)
         if (frame?.onKey(e) == true) return true
         when (e.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN, KeyEvent.KEYCODE_VOLUME_MUTE -> return super.dispatchKeyEvent(e)

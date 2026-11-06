@@ -93,7 +93,7 @@ internal class VideoWallpaper(
 
     private val sample = object : Runnable {
         override fun run() {
-            if (player == null) return
+            if (player == null || !prefs.effects.dynamicWallpaper || !prefs.effects.glass) return
             val now = SystemClock.uptimeMillis()
             // Vendor PixelCopy can swallow callbacks. Never hold the busy flag forever.
             if (pendingCapture && now - captureStartedAt > 3_000L) {
@@ -114,7 +114,8 @@ internal class VideoWallpaper(
                 capturedTimestamp = timestamp
                 capture(now)
             }
-            main.postDelayed(this, if (live) 80L else if (lowEnd) 350L else 200L)
+            main.postDelayed(this, maxOf(prefs.effects.samplePollMs,
+                if (live) 80L else if (lowEnd) 350L else 200L))
         }
     }
 
@@ -129,17 +130,17 @@ internal class VideoWallpaper(
      * Older devices take a new frost about every 4 s, or every 10 s when the TV
      * itself is short on memory or cores.
      */
-    private fun captureIntervalMs(): Long =
+    private fun captureIntervalMs(): Long = maxOf(prefs.effects.minimumCaptureMs,
         if (prefs.extremeGlass) 1000L
         else if (Build.VERSION.SDK_INT < DockGlassFallback.MODERN_MIN_SDK)
             DockGlassFallback.videoRefreshIntervalMs(weakHardware)
-        else if (lowEnd) 1_000L else 500L
+        else if (lowEnd) 1_000L else 500L)
 
     /** API 31+ keeps 480 px, or 320 px on a low-end device. Older docks always copy about 320 px. */
     private fun captureWidth(): Int =
         if (Build.VERSION.SDK_INT < DockGlassFallback.MODERN_MIN_SDK)
             minOf(DockGlassFallback.VIDEO_CAPTURE_WIDTH, texture.width)
-        else minOf(if (lowEnd) 320 else 480, texture.width)
+        else minOf(if (lowEnd || prefs.performanceProfile != PerformancePolicy.FULL) 320 else 480, texture.width)
 
     /** Called from the UI thread; only enqueues an asynchronous PixelCopy. */
     private fun capture(now: Long) {
@@ -204,6 +205,7 @@ internal class VideoWallpaper(
     }
 
     fun start(source: String) {
+        if (!prefs.effects.dynamicWallpaper) { stop(); return }
         val file = MediaFiles.wallpaper(ctx)
         val nextKey = if (source == LOCAL) "$source:${file?.lastModified()}:${file?.length()}" else source
         if (key == nextKey) return

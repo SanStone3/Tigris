@@ -74,7 +74,8 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
         onTone: ((GlassTone) -> Unit)? = null,
     ): Surface =
         Surface(view, view.dp(radius).toFloat(), content, { live }, { prefs.extremeGlass },
-            { prefs.solidGlass(root.context) }, { transmission }, onTone, { shadowLayer.invalidateSelf() }).also {
+            { prefs.solidGlass(root.context) }, { transmission }, onTone, { shadowLayer.invalidateSelf() },
+            textured = { prefs.effects.glass }).also {
             surfaces += it
             if (installBackground) view.background = it
             view.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or, ob ->
@@ -84,6 +85,16 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
 
     fun texture(bitmap: Bitmap) {
         requestedSource = bitmap
+        if (!prefs.effects.glass) {
+            liveExtreme = false
+            textureRevision++
+            source = bitmap
+            sourcePixels = null
+            softSource = null
+            live = null
+            refresh()
+            return
+        }
         liveExtreme = prefs.extremeGlass
         if (liveExtreme) prepareExtremeSource(bitmap)
         else {
@@ -165,11 +176,26 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
     /** Debounce scrolling/layout; an obsolete bake cannot replace the latest geometry. */
     fun refresh() {
         if (closed) return
+        if (!prefs.effects.glass) {
+            generation++
+            textureRevision++
+            liveExtreme = false
+            transmission = false
+            root.removeCallbacks(rebake)
+            live = null
+            source = requestedSource ?: source
+            sourcePixels = null
+            softSource = null
+            surfaces.forEach { it.bitmap = null; it.applyTone(GlassTone.Fallback); it.invalidateSelf() }
+            shadowLayer.invalidateSelf()
+            return
+        }
         shadowLayer.setBounds(0, 0, root.width, root.height)
         val changed = liveExtreme != prefs.extremeGlass
-        val nextAppearance = "${prefs.extremeGlass}:${prefs.glassLightTint}:${prefs.glassDarkTint}:${prefs.solidGlass(root.context)}:${root.resources.configuration.uiMode}"
+        val nextAppearance = "${prefs.performanceProfile}:${prefs.extremeGlass}:${prefs.glassLightTint}:${prefs.glassDarkTint}:${prefs.solidGlass(root.context)}:${root.resources.configuration.uiMode}"
         val toneChanged = appearance != nextAppearance
         appearance = nextAppearance
+        if (moving && !liveExtreme && live == null) source?.let { live = MovingGlass(root, it) }
         if (changed) {
             liveExtreme = prefs.extremeGlass
             (requestedSource ?: source)?.let {
@@ -324,7 +350,7 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
                 top + (surface.owner.height * scale).toInt().coerceAtLeast(1)), surface.radius * scale)
         }
         worker.execute {
-            if (closed || ticket != generation) return@execute
+            if (closed || ticket != generation || !prefs.effects.glass) return@execute
             val baked = targets.mapNotNull { target ->
                 if (closed || ticket != generation) return@execute
                 runCatching {
@@ -372,6 +398,7 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
         private val transmission: () -> Boolean,
         private val onTone: ((GlassTone) -> Unit)? = null,
         private val onFrame: () -> Unit = {},
+        private val textured: () -> Boolean = { true },
     ) : Drawable() {
         var bitmap: Bitmap? = null
         var shadow: Bitmap? = null
@@ -489,6 +516,24 @@ internal class UpdateGlass(private val root: View, private val moving: Boolean =
         override fun draw(canvas: Canvas) {
             rect.set(bounds)
             val r = radius.coerceAtMost(minOf(rect.width(), rect.height()) / 2)
+            if (!textured()) {
+                paint.shader = null
+                paint.style = Paint.Style.FILL
+                paint.color = Color.rgb(56, 64, 78)
+                paint.alpha = opacity * (if (focused) 150 else 90) / 255
+                canvas.drawRoundRect(rect, r, r, paint)
+                if (focused) {
+                    paint.style = Paint.Style.STROKE
+                    paint.strokeWidth = owner.dp(2).toFloat()
+                    paint.color = Color.argb(225, 255, 255, 255)
+                    paint.alpha = opacity * 225 / 255
+                    rect.inset(paint.strokeWidth / 2, paint.strokeWidth / 2)
+                    canvas.drawRoundRect(rect, (r - paint.strokeWidth / 2).coerceAtLeast(0f),
+                        (r - paint.strokeWidth / 2).coerceAtLeast(0f), paint)
+                }
+                paint.style = Paint.Style.FILL
+                return
+            }
             val isExtreme = extreme()
             paint.shader = null
             paint.alpha = if (isExtreme) opacity else (opacity * (if (content) 0.58f + 0.22f * lit else 0.8f + 0.2f * lit)).toInt()

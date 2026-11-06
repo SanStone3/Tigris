@@ -13,7 +13,8 @@ import java.net.URL
  * Top Shelf content. Android TV's own channel API is empty on the TVs this
  * was written for, so a few apps are filled from public web APIs: Bilibili
  * popular videos (云视听小电视 and the third-party client com.tutu.myblbl)
- * and Douyu live rooms.
+ * and Douyu live rooms. Mango TV, Youku and Tencent use anonymous public
+ * website recommendations. These feeds do not expose personal viewing history.
  *
  * Settings can also point one dock app at a JSON URL. That feed is cached
  * with the same 15-minute policy. A bad address, unusable JSON, or a timeout
@@ -38,13 +39,30 @@ object Shelf {
         "com.xiaodianshi.tv.yst" to "bilibili",
         "com.tutu.myblbl" to "bilibili",
         "com.douyu.xl.douyutv" to "douyu",
+        // Official TV APK manifests: pd.youku.com/CIBN and tv.qq.com.
+        // The Mango package is also listed by Coocaa's public store API.
+        "com.cibn.tv" to "youku",
+        "com.ktcp.video" to "tencent",
+        "com.hunantv.market" to "mango",
     )
 
     private data class Cached(val at: Long, val name: String, val items: List<Item>)
 
     private val sources get() = builtInPackages.mapValues { (_, kind) ->
-        if (kind == "bilibili") Source(I18n.text(R.string.i18n_shelf_001), ::bilibili)
-        else Source(I18n.text(R.string.i18n_shelf_002), ::douyu)
+        when (kind) {
+            "bilibili" -> Source(I18n.text(R.string.i18n_shelf_001), ::bilibili)
+            "douyu" -> Source(I18n.text(R.string.i18n_shelf_002), ::douyu)
+            "mango" -> Source(I18n.text(R.string.shelf_mango_source)) {
+                ShelfWebFeeds.mango(get(ShelfWebFeeds.MANGO_URL, BUILTIN_JSON_BYTES).decodeToString())
+            }
+            "youku" -> Source(I18n.text(R.string.shelf_youku_source)) {
+                ShelfWebFeeds.youku(get(ShelfWebFeeds.YOUKU_URL, BUILTIN_JSON_BYTES).decodeToString())
+            }
+            "tencent" -> Source(I18n.text(R.string.shelf_tencent_source)) {
+                ShelfWebFeeds.tencent(get(ShelfWebFeeds.TENCENT_URL, BUILTIN_JSON_BYTES, ShelfWebFeeds.tencentRequest()).decodeToString())
+            }
+            else -> error("Unknown shelf source: $kind")
+        }
     }
     private val cache = HashMap<String, Cached>()
     private val shownName = HashMap<String, String>()
@@ -222,7 +240,7 @@ object Shelf {
         }
     }
 
-    private fun get(url: String, maxBytes: Int): ByteArray {
+    private fun get(url: String, maxBytes: Int, body: String? = null): ByteArray {
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 5000
         c.readTimeout = 8000
@@ -230,7 +248,14 @@ object Shelf {
         c.setRequestProperty("User-Agent", UA)
         // B站's API answers with an empty body when sent a Referer from outside its pages.
         if ("douyu" in url) c.setRequestProperty("Referer", "https://www.douyu.com/")
+        if (url == ShelfWebFeeds.TENCENT_URL) c.setRequestProperty("Referer", "https://v.qq.com/")
         try {
+            if (body != null) {
+                c.requestMethod = "POST"
+                c.doOutput = true
+                c.setRequestProperty("Content-Type", "application/json; charset=utf-8")
+                c.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            }
             if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
             val advertised = c.contentLengthLong
             if (advertised > maxBytes) throw java.io.IOException("response too large")

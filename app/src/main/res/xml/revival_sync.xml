@@ -2,7 +2,7 @@
 <!-- Runs after system setting changes (see RevivalSync). It syncs nothing. -->
 <sync-adapter xmlns:android="http://schemas.android.com/apk/res/android"
     android:contentAuthority="settings"
-    android:accountType="com.leslie.tvhome"
+    android:accountType="@string/revival_account_type"
     android:userVisible="false"
     android:supportsUploading="true"
     android:allowParallelSyncs="false"

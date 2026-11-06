@@ -26,6 +26,8 @@ internal class SettingsDialog(
     private val confirm: () -> Boolean = { true },
     secondary: String = activity.getString(android.R.string.cancel),
     private val secondaryAction: (() -> Unit)? = null,
+    private val initialFocus: View? = null,
+    preview: View? = null,
 ) : Dialog(activity) {
     private val root = FrameLayout(activity)
     private val glass = UpdateGlass(root)
@@ -37,7 +39,7 @@ internal class SettingsDialog(
         root.setBackgroundColor(Color.argb(130, 3, 7, 15))
         root.clipChildren = false
         val width = minOf(activity.dp(650), activity.resources.displayMetrics.widthPixels - activity.dp(80))
-        val height = minOf(activity.dp(if (compact) 242 else 410),
+        val height = minOf(activity.dp(if (compact) 242 else if (preview != null) 480 else 410),
             activity.resources.displayMetrics.heightPixels - activity.dp(76))
         val frame = FrameLayout(activity).apply {
             background = rounded(Color.argb(230, 12, 22, 36), activity.dp(28).toFloat())
@@ -55,6 +57,9 @@ internal class SettingsDialog(
         panelGlass.bindInk(listOf(titleView))
         panel.addView(titleView,
             LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = activity.dp(18) })
+        if (preview != null) panel.addView(preview, LinearLayout.LayoutParams(-1, activity.dp(112)).apply {
+            bottomMargin = activity.dp(12)
+        })
         val content = LinearLayout(activity).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
@@ -70,7 +75,9 @@ internal class SettingsDialog(
             if (choice.isFocusable) {
                 val material = glass.control(choice, 14)
                 if (choice is TextView) material.bindInk(listOf(choice))
-                choice.setOnFocusChangeListener { _, on ->
+                val previousFocus = choice.onFocusChangeListener
+                choice.setOnFocusChangeListener { view, on ->
+                    previousFocus?.onFocusChange(view, on)
                     material.focus(on)
                     choice.tweenScale(if (on) 1.025f else 1f, 200)
                 }
@@ -128,6 +135,6 @@ internal class SettingsDialog(
     override fun show() {
         super.show()
         window?.setLayout(-1, -1)
-        firstButton.requestFocus()
+        (initialFocus ?: firstButton).requestFocus()
     }
 }

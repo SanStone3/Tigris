@@ -53,7 +53,6 @@ import java.util.concurrent.Executors
  */
 class HomeActivity : Activity(), TileAdapter.Listener {
     companion object {
-        const val SHELF_SECONDS = 8
         private const val EXTRA_GUARD = "com.leslie.tvhome.GUARD"
         private const val EXTRA_WAKE = "com.leslie.tvhome.WAKE"
 
@@ -102,6 +101,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private val main = Handler(Looper.getMainLooper())
     private val io = Executors.newSingleThreadExecutor()
     private val sheets = ArrayList<Sheet>()
+    private val dialogs = ArrayList<android.app.AlertDialog>()
+    private var homeClosing = false
+    private var folderOpen: String? = null
+    private var restoredFolder: String? = null
+    private val folderSelection = HashMap<String, String>()
 
     private var cols = DockLayout.DEFAULT_COLUMNS
     private var tileW = 0
@@ -113,6 +117,17 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     private var focusedPos = 0
     private var firstFocus = true
+    private var focusAnchor = HomeFocusMemory.Anchor()
+    private var dockAnchor = HomeFocusMemory.Anchor()
+    private val focusSession = HomeFocusSession()
+    private var reloadGeneration = 0L
+    private var focusPending = false
+    private var restoringFocus = false
+    private var resumeFocusPending = false
+    private var resumeHeader: Int? = null
+    private var returnDockPending = false
+    private val directionKeys = DirectionalKeyPolicy()
+    private val settleFocus = Runnable { if (::adapter.isInitialized) adapter.updateRapidFocus(false) }
     /** Grid scroll position; RecyclerView's own estimate is unreliable for grids. */
     private var scrollY = 0
     private var shownBackground: String? = null
@@ -152,19 +167,23 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private var shelfItems: List<Shelf.Item> = emptyList()
     private var shelfIndex = 0
     private var shelfShown = false
+    private val shelfSession = ShelfSession()
+    private var shelfRender = 0L
+    private var shelfTransition = 0L
     private val shelfShow = Runnable { pendingShelf?.let { showShelf(it) } }
     private val shelfAdvance = object : Runnable {
         override fun run() {
-            if (!shelfShown || shelfItems.size < 2) return
-            val pkg = shelfPkg ?: return
+            if (!shelfShown || shelfItems.size < 2 || shelfDelay() == null) return
+            val ticket = shelfSession.current ?: return
+            if (!shelfAllowed(ticket)) return
             val next = (shelfIndex + 1) % shelfItems.size
             val item = shelfItems[next]
             net.execute {
                 val b = Shelf.image(this@HomeActivity, item.image)
                 main.post {
-                    if (shelfPkg == pkg && shelfShown && !control.isOpen) {
+                    if (shelfAllowed(ticket) && shelfShown && shelfDelay() != null) {
                         if (b != null) showShelfItem(next, b)
-                        main.postDelayed(this, SHELF_SECONDS * 1000L)
+                        scheduleShelfAdvance()
                     }
                 }
             }
@@ -199,8 +218,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun screenOffTimeout(): Long? =
         runCatching { Settings.System.getLong(contentResolver, Settings.System.SCREEN_OFF_TIMEOUT) }.getOrNull()
 
-    private fun readSchedule() = FrameIdlePolicy.schedule(
-        prefs.frameScreensaver, prefs.frameIdleMinutes, screenSaverTimeout(), screenOffTimeout())
+    private fun readSchedule() = FrameIdlePolicy.schedule(prefs.frameScreensaver, prefs.frameIdleMinutes,
+        screenSaverTimeout(), screenOffTimeout(), systemScreensaver = prefs.systemScreensaver)
 
     private fun cancelIdle() {
         idleToken++
@@ -251,6 +270,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     private fun onIdleFired() {
+        if (prefs.systemScreensaver) return
         val token = idleToken
         if (!resumed) return
         val blocked = idleSuppression()
@@ -305,6 +325,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     fun openFrame() {
+        if (prefs.systemScreensaver) { SystemScreensaver.openSettings(this); return }
         startActivity(Intent(this, FrameActivity::class.java))
         overridePendingTransition(android.R.anim.fade_in, android.R.anim.fade_out)
     }
@@ -322,6 +343,17 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         super.onCreate(savedInstanceState)
         Tween.readScale(this)
         prefs = Prefs(this)
+        savedInstanceState?.let { state ->
+            focusAnchor = HomeFocusMemory.Anchor(state.getString("focus_pkg"), state.getInt("focus_index"), state.getInt("focus_scroll"))
+            dockAnchor = HomeFocusMemory.Anchor(state.getString("dock_pkg"), state.getInt("dock_index"), 0)
+            focusedPos = focusAnchor.index
+            if (state.containsKey("resume_header")) resumeHeader = state.getInt("resume_header")
+            restoredFolder = state.getString("focus_folder")
+            val keys = state.getStringArrayList("folder_ids").orEmpty()
+            val values = state.getStringArrayList("folder_members").orEmpty()
+            keys.zip(values).forEach { (key, value) -> folderSelection[key] = value }
+        }
+        SystemScreensaver.enforce(this)
         glassExtreme = prefs.extremeGlass
         cols = prefs.dockColumns
         repo = AppRepo(this)
@@ -421,7 +453,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             intro = null
             syncOwnPlayback()
             if (resumed) applyBackground()
-            if (sheets.isEmpty() && !control.isOpen) focusAt(focusedPos)
+            if (sheets.isEmpty() && !control.isOpen) restoreRememberedFocus()
         }.also {
             // API 31+ keeps the fixed delay from the wake signal. Older platforms wait until the
             // display is on: screen-on there does not mean the panel is showing a picture.
@@ -468,7 +500,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     override fun onDestroy() {
+        homeClosing = true
         resumed = false
+        shelfSession.invalidate()
+        focusSession.invalidate()
+        dialogs.toList().forEach { it.dismiss() }
+        adapter.close()
         cancelIdle()
         wallpaperPlaying = false
         syncOwnPlayback()
@@ -497,7 +534,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         bg = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         backdrop.addView(bg, match())
         videoWallpaper = VideoWallpaper(this, backdrop,
-            canSample = { resumed && !shelfShown && (prefs.extremeGlass || !videoGlassFrames.busy) },
+            canSample = { resumed && prefs.effects.dynamicWallpaper && prefs.effects.glass && !shelfShown && (prefs.extremeGlass || !videoGlassFrames.busy) },
             onFrame = ::updateVideoGlass,
             onFrostSuspended = ::showVideoVeil)
 
@@ -600,7 +637,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         listOf(netButton, ccButton, avatar).forEach { b ->
             b.setOnKeyListener { _, code, e ->
                 if (e.action != KeyEvent.ACTION_DOWN) false else when {
-                    code == KeyEvent.KEYCODE_DPAD_DOWN -> { focusAt(focusedPos); true }
+                    code == KeyEvent.KEYCODE_DPAD_DOWN -> { restoreRememberedFocus(); true }
                     code == KeyEvent.KEYCODE_DPAD_RIGHT && b == ccButton && avatar.visibility == View.VISIBLE -> { avatar.requestFocus(); true }
                     code == KeyEvent.KEYCODE_DPAD_LEFT && b == avatar -> { ccButton.requestFocus(); true }
                     else -> false
@@ -613,7 +650,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         avatar.nextFocusLeftId = ccButton.id
         scene.addView(header, match())
 
-        adapter = TileAdapter(repo, tileW, tileH, this).apply { setHasStableIds(true); dockCount = cols }
+        adapter = TileAdapter(repo, tileW, tileH, this).apply {
+            setHasStableIds(true); dockCount = cols; gapPx = gap
+            applyEffects(prefs.effects, prefs.focusTvos(this@HomeActivity))
+        }
         grid = RecyclerView(this).apply {
             clipChildren = false
             clipToPadding = false
@@ -628,11 +668,15 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             override fun requestChildRectangleOnScreen(
                 parent: RecyclerView, child: View, rect: Rect, immediate: Boolean, focusedChildVisible: Boolean,
             ): Boolean {
+                if (restoringFocus) return false
                 // The dock row rests at the bottom; any other row is brought up to the expanded position.
                 val row = getPosition(child) / cols
                 val wantedOffset = if (row == 0) 0 else firstRowY + row * rowPitch - expandedRowY
                 val dy = wantedOffset - scrollY
-                if (dy != 0) parent.smoothScrollBy(0, dy, Motion.ease, 360)
+                if (dy != 0) {
+                    parent.stopScroll()
+                    parent.smoothScrollBy(0, dy, Motion.ease, if (adapter.rapidFocus) 100 else 220)
+                }
                 return true
             }
         }
@@ -652,6 +696,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 // Measured from the rows themselves: layouts and jumps (reloads, scrollToPosition)
                 // move the grid with dy = 0, so a running sum of dy drifts away from the truth.
                 scrollY = gridOffset() ?: (scrollY + dy)
+                if (!focusPending && grid.hasFocus()) {
+                    focusAnchor = focusAnchor.copy(scroll = if (focusedPos < cols) 0 else scrollY.coerceAtLeast(0))
+                }
                 val off = scrollY.toFloat()
                 // Keep the glass with the first row and sample the wallpaper at its current position.
                 val expansion = (off / (rowPitch * 0.7f)).coerceIn(0f, 1f)
@@ -661,10 +708,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 weatherCard.alpha = 1f - expansion
                 // Off-screen controls must also leave remote-control focus navigation.
                 icons.visibility = if (off > 0f && off >= icons.bottom) View.INVISIBLE else View.VISIBLE
-                dock.alpha = 1f
-                frost.alpha = expansion
+                // Expanded apps sit directly over the clear wallpaper.
+                dock.alpha = 1f - expansion
+                dockShadow?.alpha = 1f - expansion
+                frost.alpha = 0f
                 scrollGlass.expansion = expansion
-                if (off > 0f) { dock.setImageDrawable(scrollGlass); scrollGlass.invalidateSelf() }
+                if (!prefs.effects.glass) dock.setImageDrawable(dockShown)
+                else if (off > 0f) { dock.setImageDrawable(scrollGlass); scrollGlass.invalidateSelf() }
                 else dock.setImageDrawable(if (prefs.extremeGlass) scrollGlass else dockShown)
                 // The large clock gives way to the rows coming up under it.
                 if (!shelfShown) bigClock.alpha = 1f - expansion
@@ -715,7 +765,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val theme = prefs.background
         if (theme in VideoWallpaper.SOURCES) {
             showBackground("graphite", null)
-            if (resumed && intro == null && welcome == null && getSystemService(android.os.PowerManager::class.java).isInteractive) {
+            if (prefs.effects.dynamicWallpaper && resumed && intro == null && welcome == null && getSystemService(android.os.PowerManager::class.java).isInteractive) {
                 wallpaperPlaying = true
                 videoWallpaper.start(theme)
             } else {
@@ -741,12 +791,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     private fun showBackground(theme: String, photo: java.io.File?) {
-        val key = if (Wallpapers.isPhoto(theme)) "$theme:${photo?.name}" else theme
+        val key = (if (Wallpapers.isPhoto(theme)) "$theme:${photo?.name}" else theme) + ":$glassAppearance"
         if (key == shownBackground) return
         shownBackground = key
         val modernDock = prefs.extremeGlass || DockGlassFallback.usesModernPipeline(Build.VERSION.SDK_INT)
         val lowEnd = Device.isLowEnd(this)
-        val videoTheme = prefs.background in VideoWallpaper.SOURCES
+        val effects = prefs.effects
+        val videoTheme = effects.dynamicWallpaper && prefs.background in VideoWallpaper.SOURCES
         io.execute {
             val bmp = photo?.let { Wallpapers(this, Wallpapers.sourceFor(theme)).forHome(it, clearDock = prefs.extremeGlass) }
                 ?: Backgrounds.render(if (Wallpapers.isPhoto(theme)) "green" else theme,
@@ -754,7 +805,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             // API 31+ is the existing full-resolution bake. Older TVs composite a
             // small software blur into a full-size mask. Video starts as a light
             // veil until a snapshot is ready; the TextureView keeps playing under it.
-            val glass = (if (prefs.extremeGlass) bmp else if (modernDock) {
+            val glass = (if (!effects.glass) {
+                PerformanceMaterials.dock(dockRect.width(), dockRect.height(), dockRadius)
+            } else if (prefs.extremeGlass) bmp else if (modernDock) {
                 LiquidGlass.bake(bmp, sw, sh, dockRect, dockRadius, extreme = prefs.extremeGlass,
                     darkTheme = isNight(), tintScale = prefs.glassTint(isNight()), solid = prefs.solidGlass(this))
             } else if (videoTheme) {
@@ -762,17 +815,17 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             } else {
                 DockGlassFallback.fromBackdrop(bmp, sw, sh, dockRect, dockRadius, video = false, lowEnd = lowEnd)
             }).also { it.prepareToDraw() }
-            val blurred = Wallpapers.blurred(bmp, darken = 0.22f)
+            val blurred = if (effects.glass) Wallpapers.blurred(bmp, darken = 0.22f) else bmp
             main.post {
                 if (isDestroyed || shownBackground != key) return@post
                 // A video bake may have overtaken this initial static fallback.
-                val live = prefs.background in VideoWallpaper.SOURCES && videoWallpaper.frame != null
+                val live = prefs.effects.dynamicWallpaper && prefs.background in VideoWallpaper.SOURCES && videoWallpaper.frame != null
                 if (!live) homeDock = glass
                 if (!live) {
                     frost.setImageBitmap(blurred)
-                    scrollGlass.veil = !modernDock && videoTheme
-                    scrollGlass.frostAlpha = 255
-                    if (!scrollGlass.veil) scrollGlass.texture(blurred, bmp)
+                    scrollGlass.veil = !effects.glass || !modernDock && videoTheme
+                    scrollGlass.frostAlpha = if (effects.glass) 255 else 0
+                    if (effects.glass && !scrollGlass.veil) scrollGlass.texture(blurred, bmp)
                     val fade = if (!modernDock && videoTheme) DockGlassFallback.FROST_FADE_MS else 1200
                     if (!shelfShown) setDock(glass, fade)
                 }
@@ -801,6 +854,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     /** Small video snapshots feed the existing glass renderers; never decode 4K bitmaps per frame. */
     private fun updateVideoGlass(frame: Bitmap?) {
+        if (!prefs.effects.dynamicWallpaper || !prefs.effects.glass) {
+            videoGlassFrames.invalidate()
+            return
+        }
         if (frame == null) {
             lastLegacyDockGlassMs = 0L
             videoGlassFrames.invalidate()
@@ -903,7 +960,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     /** Pre-31 video whose snapshot was too slow: a light veil and rim, no frost. */
     private fun showVideoVeil() {
-        if (isDestroyed || !::scrollGlass.isInitialized) return
+        if (isDestroyed || !prefs.effects.glass || !::scrollGlass.isInitialized) return
         if (DockGlassFallback.usesModernPipeline(Build.VERSION.SDK_INT)) return
         scrollGlass.veil = true
         scrollGlass.frostAlpha = 255
@@ -951,6 +1008,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         }
         dockShadow?.let {
             it.visibility = View.VISIBLE
+            it.alpha = dock.alpha
             return
         }
         val pad = dp(18)
@@ -963,6 +1021,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             scaleType = ImageView.ScaleType.FIT_XY
             setImageBitmap(bitmap)
             translationY = dock.translationY
+            alpha = dock.alpha
         }
         scene.addView(shadow, scene.indexOfChild(dock), FrameLayout.LayoutParams(
             dockRect.width() + pad * 2, dockRect.height() + pad * 2,
@@ -1006,13 +1065,47 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     private fun shelfCustom() = Shelf.Custom(prefs.shelfCustomPkg, prefs.shelfCustomUrl)
 
+    private fun shelfDelay() = ShelfPresentation.delayMs(prefs.shelfRotation, prefs.shelfSeconds)
+
+    private fun shelfEligible(pkg: String): Boolean = resumed && !homeClosing && !isDestroyed &&
+        welcome == null && intro == null && sheets.isEmpty() && dialogs.isEmpty() && !control.isOpen && moving < 0 &&
+        grid.hasFocus() && focusedPos < cols && adapter.apps.getOrNull(focusedPos)?.pkg == pkg &&
+        ShelfPresentation.enabled(pkg, prefs.shelfWallpaperPackages) && Shelf.has(pkg, shelfCustom())
+
+    private fun shelfAllowed(ticket: ShelfSession.Ticket) = shelfSession.accepts(ticket) &&
+        shelfPkg == ticket.pkg && shelfEligible(ticket.pkg)
+
+    private fun scheduleShelfAdvance() {
+        main.removeCallbacks(shelfAdvance)
+        val delay = shelfDelay() ?: return
+        val ticket = shelfSession.current ?: return
+        if (shelfShown && shelfItems.size > 1 && shelfAllowed(ticket)) main.postDelayed(shelfAdvance, delay)
+    }
+
+    private fun refreshShelfFocus() {
+        val pkg = adapter.apps.getOrNull(focusedPos)?.pkg
+        if (pkg == null || !shelfEligible(pkg)) { hideShelf(); return }
+        if (shelfShown && shelfPkg == pkg) {
+            if (shelfSession.current == null) shelfSession.begin(pkg)
+            scheduleShelfAdvance()
+        } else if (pendingShelf != pkg) {
+            hideShelf()
+            pendingShelf = pkg
+            main.postDelayed(shelfShow, 300)
+        }
+    }
+
     private fun showShelf(pkg: String) {
+        pendingShelf = null
+        if (!shelfEligible(pkg)) return
         shelfPkg = pkg
+        val ticket = shelfSession.begin(pkg)
+        val custom = shelfCustom()
         net.execute {
-            val items = Shelf.items(pkg, shelfCustom())
+            val items = Shelf.items(pkg, custom)
             val first = items.firstOrNull()?.let { Shelf.image(this, it.image) }
             main.post {
-                if (shelfPkg != pkg || first == null || control.isOpen) return@post
+                if (!shelfAllowed(ticket) || first == null) return@post
                 shelfItems = items
                 shelfSource.text = Shelf.sourceName(pkg)
                 shelfDots.removeAllViews()
@@ -1022,14 +1115,18 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 }
                 showShelfItem(0, first)
                 setShelfVisible(true)
-                main.removeCallbacks(shelfAdvance)
-                main.postDelayed(shelfAdvance, SHELF_SECONDS * 1000L)
+                scheduleShelfAdvance()
             }
         }
     }
 
     private fun showShelfItem(i: Int, b: Bitmap) {
         val item = shelfItems.getOrNull(i) ?: return
+        val ticket = shelfSession.current ?: return
+        if (!shelfAllowed(ticket)) return
+        val render = ++shelfRender
+        val appearance = glassAppearance
+        val effects = prefs.effects
         shelfIndex = i
         // The new picture fades in over the old one, settling from a slight zoom.
         val old = shelfFront
@@ -1041,7 +1138,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         pic.animate().alpha(1f).scaleX(1f).scaleY(1f).setDuration(if (old == null) 0 else 700).setInterpolator(Motion.ease)
             .withEndAction {
                 if (old != null) shelfPics.removeView(old)
-                if (old != null) control.refreshGlass()
+                if (old != null && !isDestroyed && shelfSession.accepts(ticket)) control.refreshGlass()
             }.start()
         shelfInfo.animate().cancel()
         shelfInfo.alpha = 0f
@@ -1051,11 +1148,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shelfInfo.animate().alpha(1f).translationY(0f).setDuration(450).setStartDelay(150).start()
         for (k in 0 until shelfDots.childCount) shelfDots.getChildAt(k).alpha = if (k == i) 1f else 0.35f
         // The dock refracts the new picture.
-        val pkg = shelfPkg
         io.execute {
             // The picture already carries the scrim (see Shelf.darken).
             // API 31+ keeps the original bake. Older TVs use the full-size mask.
-            val glass = (if (prefs.extremeGlass) b else if (DockGlassFallback.usesModernPipeline(Build.VERSION.SDK_INT)) {
+            val glass = (if (!effects.glass) {
+                PerformanceMaterials.dock(dockRect.width(), dockRect.height(), dockRadius)
+            } else if (prefs.extremeGlass) b else if (DockGlassFallback.usesModernPipeline(Build.VERSION.SDK_INT)) {
                 LiquidGlass.bake(b, sw, sh, dockRect, dockRadius, extreme = prefs.extremeGlass,
                     darkTheme = isNight(), tintScale = prefs.glassTint(isNight()), solid = prefs.solidGlass(this))
             } else {
@@ -1063,17 +1161,18 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     b, sw, sh, dockRect, dockRadius, video = false, lowEnd = Device.isLowEnd(this@HomeActivity),
                 )
             }).also { it.prepareToDraw() }
-            main.post { if (shelfShown && shelfPkg == pkg && shelfIndex == i) {
+            main.post { if (shelfShown && shelfAllowed(ticket) && shelfRender == render && glassAppearance == appearance) {
                 if (prefs.extremeGlass) scrollGlass.texture(b, b)
                 setDock(glass, 600)
             } }
         }
         // Fetch the next picture ahead of time.
-        shelfItems.getOrNull((i + 1) % shelfItems.size)?.let { n -> net.execute { Shelf.image(this, n.image) } }
+        if (shelfDelay() != null) shelfItems.getOrNull((i + 1) % shelfItems.size)?.let { n -> net.execute { Shelf.image(this, n.image) } }
     }
 
     private fun setShelfVisible(v: Boolean) {
         if (v == shelfShown) return
+        val transition = ++shelfTransition
         shelfShown = v
         if (v) shelf.visibility = View.VISIBLE else bg.visibility = View.VISIBLE
         shelf.animate().cancel()
@@ -1081,6 +1180,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         bigClock.animate().alpha(if (v) 0f else dock.alpha).setDuration(350).start()
         shelf.animate().alpha(if (v) 1f else 0f).setDuration(if (v) 500 else 350)
             .withEndAction {
+                if (isDestroyed || transition != shelfTransition) return@withEndAction
                 // The shelf covers the whole screen: stop drawing the photo underneath it.
                 if (shelfShown) bg.visibility = View.INVISIBLE
                 if (!shelfShown) {
@@ -1092,7 +1192,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             }.start()
         if (!v) {
             if (prefs.extremeGlass) {
-                val image = videoWallpaper.frame ?: (bgPhoto as? BitmapDrawable)?.bitmap
+                val image = videoWallpaper.frame?.takeIf { prefs.effects.dynamicWallpaper } ?: (bgPhoto as? BitmapDrawable)?.bitmap
                 val soft = (frost.drawable as? BitmapDrawable)?.bitmap
                 if (image != null && soft != null) scrollGlass.texture(soft, image)
             }
@@ -1105,18 +1205,22 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         main.removeCallbacks(shelfAdvance)
         pendingShelf = null
         shelfPkg = null
+        shelfSession.invalidate()
         setShelfVisible(false)
     }
 
     fun pauseShelfRotation() {
         main.removeCallbacks(shelfShow)
         main.removeCallbacks(shelfAdvance)
+        pendingShelf = null
+        shelfSession.invalidate()
     }
 
     fun resumeShelfRotation() {
-        if (shelfShown) {
-            main.removeCallbacks(shelfAdvance)
-            main.postDelayed(shelfAdvance, SHELF_SECONDS * 1000L)
+        val wasActive = shelfSession.current != null
+        refreshShelfFocus()
+        if (!wasActive && shelfShown && shelfSession.current != null) {
+            (shelfFront?.drawable as? BitmapDrawable)?.bitmap?.let { showShelfItem(shelfIndex, it) }
         }
     }
 
@@ -1137,11 +1241,11 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     /** The home scene alone, without the control center or any dialog; the glass controls sample it. */
     val sceneView: View get() = scene
-    internal fun glassVideoFrame(): Bitmap? = if (shelfShown) null else videoWallpaper.frame
+    internal fun glassVideoFrame(): Bitmap? = if (shelfShown || !prefs.effects.dynamicWallpaper) null else videoWallpaper.frame
 
     /** An opaque wallpaper base prevents transitional scene alpha from baking black into glass. */
     fun drawGlassScene(canvas: Canvas): Boolean {
-        val bitmap = videoWallpaper.frame ?: (bgPhoto as? BitmapDrawable)?.bitmap ?: return false
+        val bitmap = videoWallpaper.frame?.takeIf { prefs.effects.dynamicWallpaper } ?: (bgPhoto as? BitmapDrawable)?.bitmap ?: return false
         val scale = maxOf(scene.width.toFloat() / bitmap.width, scene.height.toFloat() / bitmap.height)
         val left = (scene.width - bitmap.width * scale) / 2f
         val top = (scene.height - bitmap.height * scale) / 2f
@@ -1170,19 +1274,40 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     fun isPinned(i: Input) = prefs.pinnedInputs.any { InputTile.decode(it)?.uri == i.uri }
 
     private fun reload(changed: String? = null, forceFocus: Boolean = false) {
+        val request = ++reloadGeneration
         io.execute {
-            val list = repo.orderedVisible()
+            val fetched = repo.orderedVisible()
             main.post {
-                val focusedPkg = adapter.apps.getOrNull(focusedPos)?.pkg
+                if (homeClosing || isDestroyed || request != reloadGeneration) return@post
+                val previous = adapter.apps.map { it.pkg }
+                val byPackage = fetched.associateBy { it.pkg }
+                val list = if (moving >= 0) HomeFocusMemory.duringMove(previous, fetched.map { it.pkg }).mapNotNull { byPackage[it] } else fetched
+                val ids = list.map { it.pkg }
+                val anchor = focusAnchor
+                val selected = HomeFocusMemory.resolve(anchor, previous, ids)
+                val selectedScroll = selected?.let { HomeFocusMemory.rebasedScroll(anchor, it, cols, rowPitch) } ?: 0
+                val dockSelected = HomeFocusMemory.resolve(dockAnchor, previous, ids, cols)
+                val gridWasFocused = grid.hasFocus()
+                val input = focusSession.input
                 adapter.submit(list, changed)
-                val idx = list.indexOfFirst { it.pkg == focusedPkg }.coerceAtLeast(0)
+                adapter.movingPkg?.let { pkg ->
+                    moving = ids.indexOf(pkg)
+                    if (moving < 0) adapter.movingPkg = null
+                }
+                selected?.let {
+                    focusedPos = it
+                    focusAnchor = HomeFocusMemory.remember(ids, it, selectedScroll)
+                }
+                dockSelected?.let { dockAnchor = HomeFocusMemory.remember(ids, it, 0) }
                 grid.post {
-                    // On first show the header buttons grab default focus; the grid should have it.
-                    val headerOk = header.hasFocus() && !firstFocus
-                    if ((forceFocus || (!grid.hasFocus() && !headerOk)) && sheets.isEmpty() && !control.isOpen) focusAt(idx)
-                    firstFocus = false
-                    // A new list can leave the grid between rows; put the focused row back where it belongs.
-                    grid.post { grid.focusedChild?.let { grid.layoutManager?.requestChildRectangleOnScreen(grid, it, Rect(), false, true) } }
+                    if (homeClosing || isDestroyed || request != reloadGeneration || input != focusSession.input) return@post
+                    val shouldFocus = firstFocus || gridWasFocused || forceFocus || resumeFocusPending
+                    if (selected != null && shouldFocus && canRestoreGrid() && (!header.hasFocus() || firstFocus)) {
+                        focusAt(selected, selectedScroll)
+                        resumeFocusPending = false
+                        firstFocus = false
+                    }
+                    restorePendingFolder()
                 }
             }
         }
@@ -1196,35 +1321,90 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         return firstRowY + (p / cols) * rowPitch - lm.getDecoratedTop(child)
     }
 
-    private fun focusAt(pos: Int) {
-        if (welcome != null || adapter.itemCount == 0) return
+    private fun canRestoreGrid() = !homeClosing && !isDestroyed && resumed && welcome == null && intro == null &&
+        sheets.isEmpty() && dialogs.isEmpty() && !control.isOpen &&
+        grid.descendantFocusability != ViewGroup.FOCUS_BLOCK_DESCENDANTS
+
+    private fun rememberGridFocus() {
+        val position = grid.focusedChild?.let { grid.getChildAdapterPosition(it) }?.takeIf { it >= 0 }
+            ?: focusedPos
+        if (!focusPending) focusedPos = position
+        val ids = adapter.apps.map { it.pkg }
+        if (ids.isEmpty()) return
+        focusAnchor = HomeFocusMemory.remember(ids, focusedPos, if (focusedPos < cols) 0 else scrollY)
+        if (focusedPos < cols) dockAnchor = focusAnchor.copy(scroll = 0)
+    }
+
+    private fun focusAt(pos: Int, restoreScroll: Int? = null) {
+        if (!canRestoreGrid() || adapter.itemCount == 0) return
         val p = pos.coerceIn(0, adapter.itemCount - 1)
-        val vh = grid.findViewHolderForAdapterPosition(p)
-        if (vh != null) vh.itemView.requestFocus() else {
-            grid.scrollToPosition(p)
-            grid.post { grid.findViewHolderForAdapterPosition(p)?.itemView?.requestFocus() }
+        val pkg = adapter.apps[p].pkg
+        val request = focusSession.begin()
+        focusedPos = p
+        focusPending = true
+        focusAnchor = HomeFocusMemory.remember(adapter.apps.map { it.pkg }, p, restoreScroll ?: if (p < cols) 0 else scrollY)
+        if (p < cols) dockAnchor = focusAnchor.copy(scroll = 0)
+        if (restoreScroll != null) {
+            grid.stopScroll()
+            (grid.layoutManager as? GridLayoutManager)?.scrollToPositionWithOffset(p, (p / cols) * rowPitch - restoreScroll.coerceAtLeast(0))
         }
+        fun apply(): Boolean {
+            if (!focusSession.accepts(request) || !canRestoreGrid()) return true
+            val index = adapter.apps.indexOfFirst { it.pkg == pkg }
+            val view = grid.findViewHolderForAdapterPosition(index)?.itemView ?: return false
+            restoringFocus = restoreScroll != null
+            view.requestFocus()
+            restoringFocus = false
+            focusPending = false
+            return true
+        }
+        if (restoreScroll == null && apply()) return
+        if (restoreScroll == null) grid.scrollToPosition(p)
+        grid.postOnAnimation { if (!apply()) grid.postOnAnimation { apply() } }
+    }
+
+    private fun returnToDock() {
+        returnDockPending = true
+        resumeHeader = null
+        focusSession.userInput()
+        focusPending = false
+        if (!canRestoreGrid()) return
+        val ids = adapter.apps.map { it.pkg }
+        val index = HomeFocusMemory.resolve(dockAnchor, ids, ids, cols) ?: return
+        returnDockPending = false
+        focusAt(index, 0)
+    }
+
+    private fun restoreRememberedFocus() {
+        if (!canRestoreGrid()) return
+        if (returnDockPending) { returnToDock(); return }
+        val ids = adapter.apps.map { it.pkg }
+        val index = HomeFocusMemory.resolve(focusAnchor, ids, ids) ?: return
+        focusAt(index, focusAnchor.scroll)
+        restorePendingFolder()
+    }
+
+    private fun restorePendingFolder() {
+        if (!canRestoreGrid() || adapter.itemCount == 0) return
+        val id = restoredFolder ?: return
+        restoredFolder = null
+        adapter.apps.firstOrNull { it.folder?.id == id }?.folder?.let(::openFolder)
     }
 
     // ------------------------------------------------------------------- tiles
 
     override fun onTileFocused(pos: Int, cell: TileCell) {
+        if (pos !in adapter.apps.indices) return
         focusedPos = pos
-        val pkg = adapter.apps.getOrNull(pos)?.pkg
-        main.removeCallbacks(shelfShow)
-        if (pos < cols && pkg != null && Shelf.has(pkg, shelfCustom()) && moving < 0) {
-            if (pkg != shelfPkg || !shelfShown) {
-                if (shelfShown) hideShelf()
-                pendingShelf = pkg
-                // Wait for focus to settle so sliding along the dock does not flicker.
-                main.postDelayed(shelfShow, 300)
-            }
-        } else hideShelf()
+        focusAnchor = HomeFocusMemory.remember(adapter.apps.map { it.pkg }, pos, if (pos < cols) 0 else if (restoringFocus) focusAnchor.scroll else scrollY)
+        if (pos < cols) dockAnchor = focusAnchor.copy(scroll = 0)
+        refreshShelfFocus()
     }
 
     override fun onTileClicked(pos: Int, cell: TileCell) {
         if (moving >= 0) { endMove(); return }
-        val app = adapter.apps.getOrNull(pos) ?: return
+        rememberGridFocus()
+        val app = adapter.apps.getOrNull(if (focusPending) focusedPos else pos) ?: return
         app.folder?.let { openFolder(it); return }
         app.input?.let { i -> io.execute { tv.setInput(i) }; return }
         // The stock launcher (Xiaomi's PatchWall) can only be opened through the system Home action.
@@ -1238,7 +1418,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             startActivity(intent, opts.toBundle())
             rememberOpened(app.pkg)
         } catch (e: Exception) {
-            Toast.makeText(this, I18n.text(R.string.i18n_homeactivity_005, app.label), Toast.LENGTH_SHORT).show()
+            Toast.makeText(this@HomeActivity, I18n.text(R.string.i18n_homeactivity_005, app.label), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -1303,13 +1483,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 else { save(name); dialog.dismiss() }
             }
         }
-        dialog.show()
+        showDialog(dialog)
     }
 
     private fun chooseFolder(app: AppEntry) {
         val store = Folders(this)
         val folders = store.read()
-        android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_020))
+        showDialog(android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_020))
             .setItems((listOf(I18n.text(R.string.i18n_homeactivity_021)) + folders.map { it.name }).toTypedArray()) { _, index ->
                 if (index == 0) folderName(I18n.text(R.string.i18n_homeactivity_022)) { name ->
                     val folder = store.create(name, app.pkg)
@@ -1317,29 +1497,48 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     prefs.order = (order + prefs.order).distinct()
                     foldersChanged()
                 } else { store.move(app.pkg, folders[index - 1].id); foldersChanged() }
-            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_023), null).show()
+            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_023), null).create())
     }
 
     private fun openFolder(folder: AppFolder) {
         val all = repo.allApps().associateBy { it.pkg }
         val apps = folder.members.filter { it !in prefs.hidden }.mapNotNull { all[it] }
         val dialog = android.app.AlertDialog.Builder(this).setTitle(folder.name)
-            .setItems(apps.map { it.label }.toTypedArray()) { _, index ->
-                val app = apps[index]
-                try {
-                    val intent = repo.launchIntent(app) ?: return@setItems
-                    if (!HomeGuardService.isStockHome(app.pkg) || !HomeGuardService.openStockLauncher()) startActivity(intent)
-                    rememberOpened(folder.id)
-                } catch (_: Exception) { Toast.makeText(this, I18n.text(R.string.i18n_homeactivity_024, app.label), Toast.LENGTH_SHORT).show() }
-            }.setNeutralButton(I18n.text(R.string.i18n_homeactivity_025)) { _, _ -> manageFolder(folder, focusedPos) }
+            .setItems(apps.map { it.label }.toTypedArray(), null)
+            .setNeutralButton(I18n.text(R.string.i18n_homeactivity_025)) { _, _ -> manageFolder(folder, focusedPos) }
             .setNegativeButton(I18n.text(R.string.i18n_homeactivity_026), null).create()
         if (apps.isEmpty()) dialog.setMessage(I18n.text(R.string.i18n_homeactivity_027))
-        dialog.show()
+        folderOpen = folder.id
+        showDialog(dialog) {
+            apps.getOrNull(dialog.listView?.selectedItemPosition ?: -1)?.let { folderSelection[folder.id] = it.pkg }
+            if (folderOpen == folder.id) folderOpen = null
+        }
+        dialog.listView?.apply {
+            val position = apps.indexOfFirst { it.pkg == folderSelection[folder.id] }.coerceAtLeast(0)
+            setSelection(position)
+            requestFocus()
+            onItemSelectedListener = object : android.widget.AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: android.widget.AdapterView<*>?, view: View?, position: Int, id: Long) {
+                    apps.getOrNull(position)?.let { folderSelection[folder.id] = it.pkg }
+                }
+                override fun onNothingSelected(parent: android.widget.AdapterView<*>?) = Unit
+            }
+            setOnItemClickListener { _, _, index, _ ->
+                val app = apps.getOrNull(index) ?: return@setOnItemClickListener
+                folderSelection[folder.id] = app.pkg
+                setSelection(index)
+                try {
+                    val intent = repo.launchIntent(app) ?: return@setOnItemClickListener
+                    if (!HomeGuardService.isStockHome(app.pkg) || !HomeGuardService.openStockLauncher()) startActivity(intent)
+                    rememberOpened(folder.id)
+                } catch (_: Exception) { Toast.makeText(this@HomeActivity, I18n.text(R.string.i18n_homeactivity_024, app.label), Toast.LENGTH_SHORT).show() }
+            }
+        }
     }
 
     private fun manageFolder(folder: AppFolder, pos: Int) {
         val store = Folders(this)
-        android.app.AlertDialog.Builder(this).setTitle(folder.name)
+        showDialog(android.app.AlertDialog.Builder(this).setTitle(folder.name)
             .setItems(arrayOf(I18n.text(R.string.i18n_homeactivity_028), I18n.text(R.string.i18n_homeactivity_029), I18n.text(R.string.i18n_homeactivity_030), I18n.text(R.string.i18n_homeactivity_031))) { _, index ->
                 when (index) {
                     0 -> folderName(folder.name) { name ->
@@ -1349,19 +1548,19 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     1 -> {
                         val all = repo.allApps().associateBy { it.pkg }
                         val members = store.read().find { it.id == folder.id }?.members.orEmpty()
-                        android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_032))
+                        showDialog(android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_032))
                             .setItems(members.map { all[it]?.label ?: it }.toTypedArray()) { _, i ->
                                 store.move(members[i], null); foldersChanged()
-                            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_033), null).show()
+                            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_033), null).create())
                     }
-                    2 -> startMove(pos)
-                    3 -> android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_034, folder.name))
+                    2 -> startMove(adapter.apps.indexOfFirst { it.pkg == folder.id }.takeIf { it >= 0 } ?: pos)
+                    3 -> showDialog(android.app.AlertDialog.Builder(this).setTitle(I18n.text(R.string.i18n_homeactivity_034, folder.name))
                         .setMessage(I18n.text(R.string.i18n_homeactivity_035))
                         .setPositiveButton(I18n.text(R.string.i18n_homeactivity_036)) { _, _ ->
                             store.save(store.read().filter { it.id != folder.id }); foldersChanged()
-                        }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_037), null).show()
+                        }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_037), null).create())
                 }
-            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_038), null).show()
+            }.setNegativeButton(I18n.text(R.string.i18n_homeactivity_038), null).create())
     }
 
     private fun confirmDelete(app: AppEntry, pos: Int) {
@@ -1398,7 +1597,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             .button(I18n.text(R.string.i18n_homeactivity_048)) {}, restoreFocusTo = pos)
     }
 
-    override fun onTileKey(pos: Int, cell: TileCell, keyCode: Int): Boolean {
+    override fun onTileKey(position: Int, cell: TileCell, keyCode: Int): Boolean {
         val (dx, dy) = when (keyCode) {
             KeyEvent.KEYCODE_DPAD_LEFT -> -1 to 0
             KeyEvent.KEYCODE_DPAD_RIGHT -> 1 to 0
@@ -1409,6 +1608,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         adapter.lastDx = dx
         adapter.lastDy = dy
         val n = adapter.itemCount
+        if (n == 0) return true
+        val pos = (if (focusPending) focusedPos else position).coerceIn(0, n - 1)
         val col = pos % cols
         val target = pos + dx + dy * cols
         val lastRow = (n - 1) / cols
@@ -1420,17 +1621,20 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 val to = target.coerceIn(0, n - 1)
                 adapter.move(pos, to)
                 moving = to
-                grid.post { focusAt(to) }
-            } else Motion.bump(cell.card, dx, dy)
+                focusAt(to)
+            } else {
+                cell.bump(dx, dy, adapter.rapidFocus)
+                if (focusPending) focusAt(pos)
+            }
             return true
         }
         if (dy < 0 && pos < cols) {
-            // Up from the first row reaches the buttons in the top-right corner.
-            ccButton.requestFocus()
+            control.open()
             return true
         }
         if (atEdge) {
-            Motion.bump(cell.card, dx, dy)
+            cell.bump(dx, dy, adapter.rapidFocus)
+            if (focusPending) focusAt(pos)
             return true
         }
         if (dy > 0 && target >= n) {
@@ -1438,40 +1642,61 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             focusAt(n - 1)
             return true
         }
-        return false
+        focusAt(target)
+        return true
     }
 
     private fun startMove(pos: Int) {
+        if (pos !in adapter.apps.indices) return
+        hideShelf()
         moving = pos
         adapter.movingPkg = adapter.apps[pos].pkg
         adapter.notifyItemChanged(pos)
-        grid.post { focusAt(pos) }
+        focusAt(pos)
         Toast.makeText(this, I18n.text(R.string.i18n_homeactivity_049), Toast.LENGTH_SHORT).show()
     }
 
     private fun endMove() {
         val pos = moving
+        if (pos < 0) return
         moving = -1
         adapter.movingPkg = null
-        adapter.notifyItemChanged(pos)
+        if (pos < adapter.itemCount) adapter.notifyItemChanged(pos)
         prefs.order = adapter.apps.map { it.pkg }
-        grid.post { focusAt(pos) }
+        focusAt(pos)
     }
 
     // ------------------------------------------------------------ overlays / keys
 
     fun showSheet(s: Sheet, restoreFocusTo: Int? = null): Sheet {
+        restoreFocusTo?.takeIf { it in adapter.apps.indices }?.let {
+            focusAnchor = HomeFocusMemory.remember(adapter.apps.map { app -> app.pkg }, it, if (it < cols) 0 else scrollY)
+        }
+        pauseShelfRotation()
         sheets += s
         setGridBlocked(true)
         s.onDismiss {
             sheets -= s
             if (sheets.isEmpty() && control.isOpen) control.refocus()
-            else if (sheets.isEmpty()) {
-                setGridBlocked(false)
-                focusAt(restoreFocusTo ?: focusedPos)
-            }
+            else if (sheets.isEmpty() && dialogs.isEmpty()) { restoreGridFocus(); resumeShelfRotation() }
         }
         return s.show()
+    }
+
+    private fun showDialog(dialog: android.app.AlertDialog, closed: () -> Unit = {}): android.app.AlertDialog {
+        pauseShelfRotation()
+        dialogs += dialog
+        setGridBlocked(true)
+        dialog.setOnDismissListener {
+            dialogs -= dialog
+            closed()
+            if (!homeClosing && dialogs.isEmpty() && sheets.isEmpty()) {
+                if (control.isOpen) control.refocus()
+                else { restoreGridFocus(); resumeShelfRotation() }
+            }
+        }
+        dialog.show()
+        return dialog
     }
 
     /** Keeps D-pad focus from wandering from an overlay onto the screen behind it. */
@@ -1482,8 +1707,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     fun restoreGridFocus() {
+        if (dialogs.isNotEmpty() || sheets.isNotEmpty() || control.isOpen || homeClosing) return
         setGridBlocked(false)
-        focusAt(focusedPos)
+        restoreRememberedFocus()
     }
 
     override fun onUserInteraction() {
@@ -1504,28 +1730,51 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Xiaomi's physical MENU binding belongs to the system, including during intros.
+        if (event.keyCode == KeyEvent.KEYCODE_MENU) return super.dispatchKeyEvent(event)
         armIdle(resetDeadline = true)
         welcome?.let { return it.key(event) }
         // Any key skips the intro to its closing zoom; nothing behind it reacts meanwhile.
         intro?.let { if (event.action == KeyEvent.ACTION_UP) it.skip(); return true }
         val code = event.keyCode
+        if (code in KeyEvent.KEYCODE_DPAD_UP..KeyEvent.KEYCODE_DPAD_RIGHT &&
+            (event.action == KeyEvent.ACTION_DOWN || event.action == KeyEvent.ACTION_UP)) {
+            val decision = directionKeys.event(code, event.action == KeyEvent.ACTION_DOWN, event.repeatCount, event.eventTime)
+            if (event.action == KeyEvent.ACTION_DOWN && sheets.isEmpty() && dialogs.isEmpty() && !control.isOpen) {
+                adapter.updateRapidFocus(decision.rapid)
+                main.removeCallbacks(settleFocus)
+                main.postDelayed(settleFocus, 180)
+                if (!decision.deliver) return true
+            }
+            if (event.action == KeyEvent.ACTION_DOWN) {
+                focusSession.userInput()
+            }
+        }
         if (event.action == KeyEvent.ACTION_DOWN && code == KeyEvent.KEYCODE_DPAD_RIGHT &&
             sheets.isEmpty() && control.isOpen && avatar.isShown && control.atRightEdge()) {
             control.close()
+            focusSession.invalidate()
+            focusPending = false
             avatar.requestFocus()
             return true
         }
-        if (event.action == KeyEvent.ACTION_UP && (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU)) {
-            when {
-                sheets.isNotEmpty() -> sheets.last().dismiss()
-                control.isOpen -> control.close()
-                moving >= 0 -> endMove()
-                header.hasFocus() -> focusAt(focusedPos)
-                else -> control.open()
+        if (event.action == KeyEvent.ACTION_UP && code == KeyEvent.KEYCODE_BACK) {
+            focusSession.userInput()
+            focusPending = false
+            when (HomeNavigationPolicy.action(HomeNavigationPolicy.Key.BACK, HomeNavigationPolicy.State(
+                sheets.isNotEmpty() || dialogs.isNotEmpty(), moving >= 0, control.isOpen,
+                focusedPos >= cols || scrollY > 0, header.hasFocus(),
+            ))) {
+                HomeNavigationPolicy.Action.DISMISS_OVERLAY -> if (dialogs.isNotEmpty()) dialogs.last().dismiss() else sheets.last().dismiss()
+                HomeNavigationPolicy.Action.END_MOVE -> endMove()
+                HomeNavigationPolicy.Action.CLOSE_CONTROL -> control.close()
+                HomeNavigationPolicy.Action.RETURN_DOCK -> returnToDock()
+                HomeNavigationPolicy.Action.STAY -> restoreRememberedFocus()
+                else -> Unit
             }
             return true
         }
-        if (code == KeyEvent.KEYCODE_BACK || code == KeyEvent.KEYCODE_MENU) return true
+        if (code == KeyEvent.KEYCODE_BACK) return true
         return super.dispatchKeyEvent(event)
     }
 
@@ -1539,16 +1788,16 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         if (welcome != null) return
         if (intent.getBooleanExtra(Intro.EXTRA_PREVIEW, false)) { playIntro(preview = true); return }
         if (intent.getBooleanExtra(EXTRA_WAKE, false)) return // consume only the pending wake, never re-arm
+        // The guard resumes the same surface, including an open folder or selection.
+        if (intent.getBooleanExtra(EXTRA_GUARD, false)) return
         // Home pressed while already home: close everything and go back to the top.
+        returnDockPending = true
+        restoredFolder = null
+        dialogs.toList().forEach { it.dismiss() }
         sheets.toList().forEach { it.dismiss() }
         control.close()
         if (moving >= 0) endMove()
-        // The guard brought the screen back (an app exited to the stock launcher): stay where we were.
-        if (intent.getBooleanExtra(EXTRA_GUARD, false)) return
-        focusedPos = 0
-        // Scroll by our own offset: smoothScrollToPosition aligns to the padding and leaves the grid off its resting place.
-        grid.smoothScrollBy(0, -scrollY, Motion.ease, 360)
-        grid.postDelayed({ focusAt(0) }, 400)
+        returnToDock()
     }
 
     override fun onStart() {
@@ -1561,7 +1810,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         super.onResume()
         // Rebuild only after Settings changes column count; order/folders remain in Prefs.
         if (cols != prefs.dockColumns) { recreate(); return }
-        val appearance = "${prefs.extremeGlass}:${prefs.glassTint(isNight())}:${prefs.solidGlass(this)}:${isNight()}"
+        val appearance = "${prefs.performanceProfile}:${prefs.extremeGlass}:${prefs.glassTint(isNight())}:${prefs.solidGlass(this)}:${isNight()}"
         if (glassAppearance != appearance) {
             glassAppearance = appearance
             glassExtreme = prefs.extremeGlass
@@ -1571,7 +1820,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         prefs.observe(wallpaperChanges)
         avatar.visibility = if (prefs.showAvatar) View.VISIBLE else View.GONE
         avatar.setPortrait(SettingsActivity.avatarFile(this)?.let { SettingsActivity.decodeIcon(it, 96) })
-        adapter.tvosFocus = prefs.focusTvos(this)
+        adapter.applyEffects(prefs.effects, prefs.focusTvos(this))
+        adapter.updateRapidFocus(false)
+        directionKeys.reset()
         applyClockStyle()
         control.applyStyle()
         if (getSystemService(android.os.PowerManager::class.java).isInteractive) consumeWakeIntro()
@@ -1590,10 +1841,43 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         main.removeCallbacks(ticker)
         ticker.run()
         control.refresh()
-        if (shelfShown && !control.isOpen) resumeShelfRotation()
+        if (shelfPkg?.let { !ShelfPresentation.enabled(it, prefs.shelfWallpaperPackages) } == true) hideShelf()
+        if (!control.isOpen) resumeShelfRotation()
+        if (firstFocus || resumeFocusPending || returnDockPending) {
+            val input = focusSession.input
+            grid.post {
+                if (input != focusSession.input || !canRestoreGrid()) return@post
+                val button = resumeHeader?.let { listOf(netButton, ccButton, avatar).getOrNull(it) }?.takeIf { it.isShown }
+                if (button != null && !returnDockPending) button.requestFocus() else restoreRememberedFocus()
+                if (adapter.itemCount > 0) firstFocus = false
+                resumeFocusPending = false
+            }
+        }
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        rememberGridFocus()
+        outState.putString("focus_pkg", focusAnchor.pkg)
+        outState.putInt("focus_index", focusAnchor.index)
+        outState.putInt("focus_scroll", focusAnchor.scroll)
+        outState.putString("dock_pkg", dockAnchor.pkg)
+        outState.putInt("dock_index", dockAnchor.index)
+        outState.putString("focus_folder", folderOpen)
+        resumeHeader?.let { outState.putInt("resume_header", it) }
+        outState.putStringArrayList("folder_ids", ArrayList(folderSelection.keys))
+        outState.putStringArrayList("folder_members", ArrayList(folderSelection.keys.map { folderSelection.getValue(it) }))
+        super.onSaveInstanceState(outState)
     }
 
     override fun onPause() {
+        rememberGridFocus()
+        resumeHeader = listOf(netButton, ccButton, avatar).indexOfFirst { it.hasFocus() }.takeIf { it >= 0 }
+        resumeFocusPending = true
+        focusSession.invalidate()
+        focusPending = false
+        directionKeys.reset()
+        main.removeCallbacks(settleFocus)
+        pauseShelfRotation()
         logPower("pause")
         HomeGuardService.onHomePaused()
         resumed = false

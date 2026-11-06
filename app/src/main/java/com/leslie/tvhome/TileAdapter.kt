@@ -37,6 +37,7 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
     }
     private val shadowPad = dp(SHADOW_PAD)
     private val focusTween = Tween()
+    private val bumpTween = Tween()
     /** The light glancing off a focused tile; only drawn while focused. */
     private val sheen = View(ctx).apply {
         background = android.graphics.drawable.GradientDrawable().apply {
@@ -72,15 +73,23 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
      * from the direction of travel; with [tvos] a soft highlight glides across it as it settles,
      * light catching a glass surface. Driven by [Tween], so it plays even with animations off.
      */
-    fun setFocusedLook(f: Boolean, fromDx: Int, fromDy: Int, showLabel: Boolean = true, tvos: Boolean = true) {
+    internal fun setFocusedLook(
+        f: Boolean, fromDx: Int, fromDy: Int, showLabel: Boolean = true, tvos: Boolean = true,
+        motion: FocusMotionPolicy.Target = FocusMotionPolicy.target(PerformancePolicy.effects(PerformancePolicy.BALANCED),
+            !showLabel, false, tileW, tileW / 4, resources.displayMetrics.density),
+    ) {
+        bumpTween.cancel()
+        translationX = 0f; translationY = 0f
         val s0 = card.scaleX
-        val s1 = if (f) FOCUS_SCALE else 1f
+        val s1 = if (f) motion.scale else 1f
         // Draw the lifted tile (and its shadow) above its neighbours.
         translationZ = if (f) 1f else 0f
         card.cameraDistance = tileW * 14f
         val tilt = f && tvos && (fromDx != 0 || fromDy != 0)
-        val rx0 = if (tilt) -fromDy * 6f else card.rotationX
-        val ry0 = if (tilt) fromDx * 6f else card.rotationY
+        val rx0 = if (tilt) -fromDy * motion.tilt else card.rotationX
+        val ry0 = if (tilt) fromDx * motion.tilt else card.rotationY
+        val y0 = card.translationY
+        val y1 = if (f) -motion.liftPx else 0f
         val z1 = if (f) dp(4).toFloat() else 0f
         val z0 = card.translationZ
         val sh0 = shadow.alpha
@@ -99,11 +108,12 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
         val gx0 = sheen.translationX
         val gy0 = sheen.translationY
         sheen.visibility = if (f && tvos || g0 > 0f) VISIBLE else INVISIBLE
-        focusTween.start(if (f) 260 else 170, if (f) Motion.spring else Motion.ease, end = {
+        focusTween.start(if (f) motion.enterMs else motion.exitMs, if (f && motion.spring) Motion.spring else Motion.ease, end = {
             if (!f) sheen.visibility = INVISIBLE
         }) { p ->
             val e = p.coerceAtMost(1f)
-            card.scaleX = lerp(s0, s1, p); card.scaleY = card.scaleX
+            card.scaleX = lerp(s0, s1, p).coerceIn(1f, motion.maxScale); card.scaleY = card.scaleX
+            card.translationY = lerp(y0, y1, e)
             card.rotationX = lerp(rx0, 0f, e)
             card.rotationY = lerp(ry0, 0f, e)
             card.translationZ = lerp(z0, z1, e)
@@ -118,7 +128,6 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
 
     companion object {
         const val SHADOW_PAD = 30
-        const val FOCUS_SCALE = 1.12f
         // 5/6-column Dock tiles have different sizes; one global bitmap
         // silently stretches the old shadow after switching layout. Cache by size.
         private val shadows = mutableMapOf<Pair<Int, Int>, android.graphics.Bitmap>()
@@ -128,6 +137,24 @@ class TileCell(ctx: Context, val tileW: Int, val tileH: Int) : FrameLayout(ctx) 
             shadows.getOrPut(w to h) {
                 LiquidGlass.shadow(w, h, ctx.dp(11).toFloat(), ctx.dp(SHADOW_PAD))
             }
+    }
+
+    internal fun bump(dx: Int, dy: Int, rapid: Boolean) {
+        if (rapid) return
+        bumpTween.start(150, android.view.animation.LinearInterpolator()) { p ->
+            val f = if (p < 0.5f) p * 2 else (1 - p) * 2
+            translationX = dx * dp(3) * f
+            translationY = dy * dp(2) * f
+        }
+    }
+
+    internal fun resetMotion() {
+        focusTween.cancel(); bumpTween.cancel(); setJiggle(false)
+        translationX = 0f; translationY = 0f; translationZ = 0f
+        card.scaleX = 1f; card.scaleY = 1f
+        card.rotationX = 0f; card.rotationY = 0f
+        card.translationY = 0f; card.translationZ = 0f
+        shadow.alpha = 0f; label.alpha = 0f; sheen.alpha = 0f; sheen.visibility = INVISIBLE
     }
 
     fun setJiggle(on: Boolean) {
@@ -164,16 +191,54 @@ class TileAdapter(
         private set
     var movingPkg: String? = null
     private val loader = Executors.newFixedThreadPool(2)
+    private var attached: RecyclerView? = null
+    private var disposed = false
 
     /** Tiles in the dock (the first row) hide their name, which would sit on the glass edge. */
     var dockCount = 0
 
     /** Tilt-in and gliding highlight on focus ([Prefs.focusTvos]); otherwise only the zoom and shadow. */
     var tvosFocus = true
+    internal var effects = PerformancePolicy.effects(PerformancePolicy.BALANCED)
+    var gapPx = 0
+    var rapidFocus = false
+        private set
 
     /** Direction of the last D-pad move, used for the tilt-in. */
     var lastDx = 0
     var lastDy = 0
+
+    internal fun applyEffects(value: PerformancePolicy.Effects, tvos: Boolean) {
+        effects = value
+        tvosFocus = tvos
+        refreshFocus()
+    }
+
+    fun updateRapidFocus(rapid: Boolean) {
+        if (rapidFocus == rapid) return
+        rapidFocus = rapid
+        refreshFocus()
+    }
+
+    private fun renderFocus(cell: TileCell, position: Int, dx: Int = 0, dy: Int = 0) {
+        val motion = FocusMotionPolicy.target(effects, position in 0 until dockCount, rapidFocus, tileW, gapPx,
+            cell.resources.displayMetrics.density)
+        cell.setFocusedLook(cell.hasFocus(), dx, dy, showLabel = position >= dockCount, tvos = tvosFocus && !rapidFocus, motion = motion)
+    }
+
+    private fun refreshFocus() {
+        val view = attached ?: return
+        for (i in 0 until view.childCount) {
+            val cell = view.getChildAt(i) as? TileCell ?: continue
+            renderFocus(cell, view.getChildAdapterPosition(cell))
+        }
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) { attached = recyclerView }
+    override fun onDetachedFromRecyclerView(recyclerView: RecyclerView) { attached = null }
+    override fun onViewRecycled(holder: VH) { holder.cell.resetMotion(); holder.cell.tag = null }
+
+    fun close() { disposed = true; loader.shutdownNow(); attached = null }
 
     /**
      * Updates only the tiles that changed, so a package event doesn't rebind
@@ -206,7 +271,7 @@ class TileAdapter(
         val vh = VH(cell)
         cell.setOnFocusChangeListener { _, f ->
             val p = vh.bindingAdapterPosition
-            cell.setFocusedLook(f, lastDx, lastDy, showLabel = p >= dockCount, tvos = tvosFocus)
+            renderFocus(cell, p, lastDx, lastDy)
             if (f && p != RecyclerView.NO_POSITION) listener.onTileFocused(p, cell)
         }
         cell.setOnClickListener {
@@ -230,6 +295,7 @@ class TileAdapter(
         val same = cell.tag == app.pkg
         cell.tag = app.pkg
         cell.setJiggle(app.pkg == movingPkg)
+        renderFocus(cell, position)
         val cached = repo.cachedTile(app.pkg)
         if (cached != null) {
             cell.image.setImageBitmap(cached)
@@ -238,7 +304,7 @@ class TileAdapter(
             if (!same) cell.image.setImageDrawable(null)
             loader.execute {
                 val bmp = repo.tile(app)
-                cell.post { if (cell.tag == app.pkg) cell.image.setImageBitmap(bmp) }
+                cell.post { if (!disposed && cell.tag == app.pkg) cell.image.setImageBitmap(bmp) }
             }
         }
     }

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_performance">性能档位</string>
+    <string name="settings_performance_help">选择特效预算；不会改变壁纸清晰度或 4K 选择。</string>
+    <string name="settings_profile_smooth">流畅</string>
+    <string name="settings_profile_balanced">均衡</string>
+    <string name="settings_profile_full">完整特效</string>
+    <string name="settings_profile_smooth_desc">静态壁纸、平面控制中心、焦点不倾斜；较轻、更快的焦点动画。</string>
+    <string name="settings_profile_balanced_desc">允许动态壁纸与常规玻璃；适度放大和倾斜；暂停极致玻璃。</string>
+    <string name="settings_profile_full_desc">更大焦点放大和倾斜；允许动态壁纸与极致玻璃，并遵循已保存的开关。</string>
+    <string name="settings_budget_note">保存样式偏好；流畅档使用平面控制中心并关闭倾斜，其他档遵循所选样式。</string>
+    <string name="settings_extreme_help">完整特效档可用；此开关保留你的独立选择。</string>
+    <string name="settings_extreme_budget">当前档位暂停极致玻璃。打开档位列表可选完整特效；原开关选择会保留。</string>
+    <string name="settings_restore_appearance">恢复外观默认</string>
+    <string name="settings_restore_scope">仅恢复性能档、Dock 列数、时钟样式、焦点、玻璃及顶部内容展示。保留应用、文件夹、上传、壁纸与清晰度、屏保、网络及授权。</string>
+    <string name="settings_restore_confirm">恢复这些设置</string>
+    <string name="settings_shelf_apps">逐应用设置顶部内容</string>
+    <string name="settings_shelf_apps_help">为已配置内容源的应用选择推荐或壁纸。内容是公开推荐，来源不可用时保留壁纸。</string>
+    <string name="settings_shelf_rotation">自动轮播顶部内容</string>
+    <string name="settings_shelf_rotation_help">关闭后暂停自动切换，保留当前可用推荐图。</string>
+    <string name="settings_shelf_interval">顶部内容轮播间隔</string>
+    <string name="settings_seconds">%1$d 秒</string>
+    <string name="settings_shelf_empty">已安装应用中暂无已配置的推荐来源。</string>
+    <string name="settings_shelf_recommendations">推荐内容</string>
+    <string name="settings_shelf_wallpaper">保留壁纸</string>
+    <string name="settings_apply">应用</string>
+    <string name="settings_preview_note">局部焦点与玻璃预算样例；实际仍遵循样式开关。</string>
+    <string name="settings_preview_tile">焦点磁贴</string>
+</resources>

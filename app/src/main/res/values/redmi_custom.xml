@@ -1,0 +1,9 @@
+<resources>
+    <string name="system_screensaver_title">Use TV system screensaver</string>
+    <string name="system_screensaver_desc">Managed by TV settings; disables the Tigris frame timer and dream service</string>
+    <string name="system_screensaver_settings">Open TV screensaver settings</string>
+    <string name="system_screensaver_settings_desc">Select the system screensaver again if no previous selection was recorded</string>
+    <string name="system_screensaver_unavailable">Open your TV settings with the remote and select a system screensaver</string>
+    <string name="ui_resolution_title">Actual desktop resolution</string>
+    <string name="ui_resolution_desc">App window and panel output are measured separately; a 4K wallpaper does not change firmware UI resolution</string>
+</resources>

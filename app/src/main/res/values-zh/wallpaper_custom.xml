@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wallpaper_bing_daily">必应每日精选</string>
+    <string name="wallpaper_more_sources">更多来源与动态壁纸</string>
+    <string name="wallpaper_solid_colors">纯色与渐变</string>
+    <string name="wallpaper_quality_note">优先使用可用的 4K 图片；较小的图片保留实际尺寸。</string>
+</resources>

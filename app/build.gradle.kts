@@ -12,6 +12,7 @@ android {
         targetSdk = 31
         versionCode = 29
         versionName = "2.0.22"
+        resValue("string", "revival_account_type", "com.leslie.tvhome")
     }
 
     // standard declares itself a home screen. guard does not: TCL's package verifier refuses any
@@ -34,6 +35,12 @@ android {
         }
     }
     buildTypes {
+        debug {
+            // A local key cannot update an upstream-signed APK. Keep the installed desktop intact.
+            applicationIdSuffix = ".redmi"
+            versionNameSuffix = "-redmi-local"
+            resValue("string", "revival_account_type", "com.leslie.tvhome.redmi")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -41,6 +48,8 @@ android {
             signingConfig = signingConfigs.findByName("stable") ?: signingConfigs.getByName("debug")
         }
     }
+
+    buildFeatures { buildConfig = true; resValues = true }
 
     lint {
         // Sideloaded onto one TV, never published to Play.

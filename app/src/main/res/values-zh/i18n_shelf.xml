@@ -6,6 +6,9 @@
     <string name="i18n_shelf_004">%1$s · %2$s · %3$s热度</string>
     <string name="i18n_shelf_005">%1$.1f亿</string>
     <string name="i18n_shelf_006">%1$.1f万</string>
+    <string name="shelf_mango_source">芒果TV · 热门剧集</string>
+    <string name="shelf_youku_source">优酷 · 热门推荐</string>
+    <string name="shelf_tencent_source">腾讯视频 · 热门推荐</string>
     <string name="shelf_custom_section">顶部内容</string>
     <string name="shelf_custom_url">自定义来源</string>
     <string name="shelf_custom_url_help">关联应用在 Dock 第一排被选中时显示。地址打不开、JSON 不能用或超时时，如果这个应用本来就有顶部内容，就继续用原来的。</string>

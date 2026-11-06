@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="wallpaper_bing_daily">Bing daily picks</string>
+    <string name="wallpaper_more_sources">More sources and live wallpapers</string>
+    <string name="wallpaper_solid_colors">Colors and gradients</string>
+    <string name="wallpaper_quality_note">Prefer 4K when available; lower-resolution images stay at their actual size.</string>
+</resources>

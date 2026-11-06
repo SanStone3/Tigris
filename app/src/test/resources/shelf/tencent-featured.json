@@ -1,0 +1,41 @@
+{
+  "ret": 0,
+  "data": {
+    "CardList": [
+      {
+        "type": "pc_carousel",
+        "children_list": {
+          "list": {
+            "cards": [
+              {
+                "params": {
+                  "title": "八仙！",
+                  "image_url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-1_1008539256_1793928551310969_pic_1080x607/0",
+                  "cid": "mzc00200iivbt9k"
+                }
+              },
+              {
+                "params": {
+                  "title": "走马上任",
+                  "image_url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_766435538_1793942617810318_pic_1080x607/0",
+                  "cid": "mzc00200zsqz54y"
+                }
+              }
+            ]
+          },
+          "ad_list": {
+            "cards": [
+              {
+                "params": {
+                  "ad_title": "无套路,无隐藏,无暗坑,无强氪",
+                  "ad_type": "plain",
+                  "cid": ""
+                }
+              }
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

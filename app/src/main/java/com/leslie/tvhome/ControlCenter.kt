@@ -317,7 +317,7 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
     fun applyStyle() {
         val glass = prefs.ccGlass(ctx)
         val extreme = prefs.extremeGlass
-        val nextAppearance = "$extreme:$night:${prefs.glassTint(night)}:${prefs.solidGlass(ctx)}"
+        val nextAppearance = "${prefs.performanceProfile}:$extreme:$night:${prefs.glassTint(night)}:${prefs.solidGlass(ctx)}"
         if (glass == glassStyle && nextAppearance == appearance && panel.tag != null) return
         appearance = nextAppearance
         panel.tag = true
@@ -1138,8 +1138,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         panel.scaleY = 0.97f
         panel.pivotX = panel.width - panel.paddingRight.toFloat()
         panel.pivotY = panel.paddingTop.toFloat()
-        scrim.animate().alpha(1f).setDuration(220).start()
-        panel.animate().alpha(1f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(320)
+        scrim.animate().alpha(1f).setDuration(prefs.effects.enterMs).start()
+        panel.animate().alpha(1f).translationX(0f).scaleX(1f).scaleY(1f).setDuration(prefs.effects.enterMs)
             .setInterpolator(Motion.ease).setUpdateListener { if (glassStyle) invalidateSurfaces() }.start()
         memButton.requestFocus()
         host.removeCallbacks(ticker)
@@ -1165,8 +1165,8 @@ class ControlCenter(private val home: HomeActivity, private val host: FrameLayou
         host.removeCallbacks(ticker)
         brightness.finishAnimation()
         volume.finishAnimation()
-        scrim.animate().alpha(0f).setDuration(180).start()
-        panel.animate().alpha(0f).translationX(ctx.dp(24).toFloat()).scaleX(0.97f).scaleY(0.97f).setDuration(200)
+        scrim.animate().alpha(0f).setDuration(prefs.effects.exitMs).start()
+        panel.animate().alpha(0f).translationX(ctx.dp(24).toFloat()).scaleX(0.97f).scaleY(0.97f).setDuration(prefs.effects.exitMs)
             .setUpdateListener { if (glassStyle) invalidateSurfaces() }
             .withEndAction {
                 host.removeView(scrim)

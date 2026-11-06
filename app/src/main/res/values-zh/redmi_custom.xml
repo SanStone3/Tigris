@@ -1,0 +1,9 @@
+<resources>
+    <string name="system_screensaver_title">使用电视系统屏保</string>
+    <string name="system_screensaver_desc">由小米/电视设置管理屏保；关闭 Tigris 相框计时与屏保服务</string>
+    <string name="system_screensaver_settings">打开电视屏保设置</string>
+    <string name="system_screensaver_settings_desc">若未保存原屏保，请在系统设置中重新选择</string>
+    <string name="system_screensaver_unavailable">请用遥控器打开电视设置，选择系统屏保</string>
+    <string name="ui_resolution_title">桌面实际分辨率</string>
+    <string name="ui_resolution_desc">应用窗口与面板输出分别检测；4K 壁纸不会改变固件的 UI 分辨率</string>
+</resources>

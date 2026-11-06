@@ -1,0 +1,25 @@
+{
+  "code": 200,
+  "data": {
+    "advs": [
+      {
+        "id": "9000077",
+        "row": "4"
+      }
+    ],
+    "hitDocs": [
+      {
+        "title": "玉簟秋",
+        "img": "https://0img.hitv.com/preview/sp_images/2025/10/31/202510311138101564558.jpg",
+        "imgUrlH": "http://0img.hitv.com/preview/sp_images/2025/10/31/202510311138040157719.jpg",
+        "updateInfo": "更新至40集"
+      },
+      {
+        "title": "小巷人家",
+        "img": "https://3img.hitv.com/preview/sp_images/2024/10/17/202410171130396305411.jpg",
+        "imgUrlH": "http://2img.hitv.com/preview/sp_images/2024/10/17/202410171130268534106.jpg",
+        "updateInfo": "全40集"
+      }
+    ]
+  }
+}

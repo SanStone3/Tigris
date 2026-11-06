@@ -139,6 +139,7 @@ object Guard {
     fun ensure(ctx: Context): Boolean {
         if (!isUserUnlocked(ctx)) return false
         ensureAdb(ctx)
+        SystemScreensaver.enforce(ctx)
         if (!hasSecureSettings(ctx)) return false
         keepScreensaver(ctx)
         if (!Prefs(ctx).guard) return false
@@ -280,6 +281,7 @@ class RevivalListener : NotificationListenerService() {
 class ConfigReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val prefs = Prefs(c)
+        if (i.hasExtra("system_screensaver")) prefs.systemScreensaver = i.getBooleanExtra("system_screensaver", true)
         if (i.hasExtra("keep_adb")) prefs.keepAdb = i.getBooleanExtra("keep_adb", false)
         if (i.hasExtra("guard")) Guard.setEnabled(c, i.getBooleanExtra("guard", false))
         if (i.hasExtra("home_filter")) {
@@ -308,6 +310,6 @@ class ConfigReceiver : BroadcastReceiver() {
         resultData = "guard=${prefs.guard} keep_adb=${prefs.keepAdb} home_filter=${prefs.persistentHomeFilter} secure_settings=${Guard.hasSecureSettings(c)} " +
             "background=${prefs.background} cc_style=${prefs.ccStyle} focus_style=${prefs.focusStyle} clock_style=${prefs.clockStyle} clock_24=${prefs.clock24} " +
             "intro=${prefs.intro} intro_source=${prefs.introSource} wake_delay=${prefs.wakeDelay} own_icon=${prefs.ownIcon} " +
-            "settings_bg=${prefs.settingsBg} extreme_glass=${prefs.extremeGlass} low_end=${Device.isLowEnd(c)}"
+            "settings_bg=${prefs.settingsBg} extreme_glass=${prefs.extremeGlass} system_screensaver=${prefs.systemScreensaver} low_end=${Device.isLowEnd(c)}"
     }
 }

@@ -54,6 +54,9 @@ object InputTile {
 class AppRepo(private val ctx: Context) {
     private val pm: PackageManager = ctx.packageManager
     private val prefs = Prefs(ctx)
+    // Rasterize at the window's density; retain the existing logical artwork geometry.
+    private val artworkScale = if (UiResolution.nativeUhd(ctx.resources.displayMetrics.widthPixels,
+        ctx.resources.displayMetrics.heightPixels)) 2 else 1
     private val tiles = object : LruCache<String, Bitmap>(24 * 1024 * 1024) {
         override fun sizeOf(key: String, value: Bitmap) = value.byteCount
     }
@@ -159,8 +162,8 @@ class AppRepo(private val ctx: Context) {
     fun tile(app: AppEntry): Bitmap {
         val key = tileKey(app.pkg)
         tiles.get(key)?.let { return it }
-        val bmp = Bitmap.createBitmap(TILE_W, TILE_H, Bitmap.Config.ARGB_8888)
-        val c = Canvas(bmp)
+        val bmp = Bitmap.createBitmap(TILE_W * artworkScale, TILE_H * artworkScale, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmp).apply { scale(artworkScale.toFloat(), artworkScale.toFloat()) }
         app.folder?.let { f ->
             c.drawColor(Color.rgb(56, 62, 82))
             val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -179,7 +182,7 @@ class AppRepo(private val ctx: Context) {
         }
         app.input?.let { drawInputTile(c, it); tiles.put(key, bmp); return bmp }
         val own = if (app.component.className == SettingsActivity::class.java.name)
-            SettingsActivity.customIcon(ctx)?.let { SettingsActivity.decodeIcon(it, TILE_W) }?.let { BitmapDrawable(ctx.resources, it) }
+            SettingsActivity.customIcon(ctx)?.let { SettingsActivity.decodeIcon(it, TILE_W * artworkScale) }?.let { BitmapDrawable(ctx.resources, it) }
         else null
         val banner = own ?: try {
             pm.getActivityInfo(app.component, 0).loadBanner(pm)
@@ -239,7 +242,7 @@ class AppRepo(private val ctx: Context) {
 
     /** Render a real icon at high resolution, then scale it down once over a calm backdrop. */
     private fun drawIconTile(c: Canvas, icon: Drawable) {
-        val sourceSize = 256
+        val sourceSize = 256 * artworkScale
         val source = Bitmap.createBitmap(sourceSize, sourceSize, Bitmap.Config.ARGB_8888)
         icon.setBounds(0, 0, sourceSize, sourceSize)
         icon.draw(Canvas(source))

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="settings_performance">Performance profile</string>
+    <string name="settings_performance_help">Choose an effects budget. Wallpaper resolution is independent and stays unchanged.</string>
+    <string name="settings_profile_smooth">Smooth</string>
+    <string name="settings_profile_balanced">Balanced</string>
+    <string name="settings_profile_full">Full effects</string>
+    <string name="settings_profile_smooth_desc">Static wallpaper, plain controls and no focus tilt; lighter, faster focus animation.</string>
+    <string name="settings_profile_balanced_desc">Dynamic wallpaper and regular glass allowed; moderate focus scale and tilt; extreme glass paused.</string>
+    <string name="settings_profile_full_desc">Larger focus scale and tilt; dynamic wallpaper and extreme glass allowed, following your saved switches.</string>
+    <string name="settings_budget_note">Your style choice is saved. Smooth uses plain controls and disables tilt; other profiles follow the selected style.</string>
+    <string name="settings_extreme_help">Available in Full effects. This switch preserves your own choice.</string>
+    <string name="settings_extreme_budget">Paused by this profile. Open the profile list to choose Full effects; your glass switch stays saved.</string>
+    <string name="settings_restore_appearance">Restore appearance defaults</string>
+    <string name="settings_restore_scope">Reset only the performance profile, Dock columns, clock style, focus, glass and Top Shelf presentation. Keep apps, folders, uploads, wallpaper and quality, screensaver, network and permissions.</string>
+    <string name="settings_restore_confirm">Restore these settings</string>
+    <string name="settings_shelf_apps">Top Shelf per app</string>
+    <string name="settings_shelf_apps_help">Choose recommendations or wallpaper for apps with a configured source. Feeds are public recommendations; unavailable feeds leave your wallpaper visible.</string>
+    <string name="settings_shelf_rotation">Rotate Top Shelf</string>
+    <string name="settings_shelf_rotation_help">Off pauses automatic changes and keeps the current available recommendation still.</string>
+    <string name="settings_shelf_interval">Top Shelf interval</string>
+    <string name="settings_seconds">%1$d seconds</string>
+    <string name="settings_shelf_empty">No installed apps have a configured recommendation source.</string>
+    <string name="settings_shelf_recommendations">Recommendations</string>
+    <string name="settings_shelf_wallpaper">Wallpaper</string>
+    <string name="settings_apply">Apply</string>
+    <string name="settings_preview_note">Local focus and glass budget sample; saved style switches still apply.</string>
+    <string name="settings_preview_tile">Focused tile</string>
+</resources>

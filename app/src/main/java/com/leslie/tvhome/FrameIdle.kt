@@ -113,7 +113,9 @@ internal object FrameIdlePolicy {
      * The in-app timer must always run *before* the earliest applicable deadline.
      */
     fun schedule(frameEnabled: Boolean, idleMinutes: Int, screenSaverTimeoutMs: Long?,
-                 screenOffTimeoutMs: Long? = null): Schedule {
+                 screenOffTimeoutMs: Long? = null, systemScreensaver: Boolean = false): Schedule {
+        if (systemScreensaver) return Schedule(null, Source.NOT_SCHEDULED,
+            "frame idle: firmware screensaver owns idle timing")
         val chosen = minutes(idleMinutes)
         val prefMs = chosen * 60_000L
         val vendorLead = aheadOf(screenSaverTimeoutMs, VENDOR_LEAD_MS)

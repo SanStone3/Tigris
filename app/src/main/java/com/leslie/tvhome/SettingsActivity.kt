@@ -35,7 +35,6 @@ import com.leslie.tvhome.tv.TvControls
  */
 class SettingsActivity : Activity() {
     companion object {
-        const val SONY_DREAM = "com.sony.dtv.braviashow/com.sony.dtv.braviashow.BraviaDayDreamService"
         const val AVATAR_FILE = "profile_avatar.png"
         fun avatarFile(ctx: android.content.Context) = java.io.File(ctx.filesDir, AVATAR_FILE).takeIf { it.isFile }
         const val ICON_FILE = "settings_icon.png"
@@ -97,7 +96,7 @@ class SettingsActivity : Activity() {
     /** The main-page row that opened the current sub-page, focused again on the way back. */
     private var opener = 0
 
-    private enum class Page { MAIN, KEEP, HIDDEN, REMOVED, SHELF_APP }
+    private enum class Page { MAIN, KEEP, HIDDEN, REMOVED, SHELF_APP, SHELF_DISPLAY }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -205,6 +204,7 @@ class SettingsActivity : Activity() {
             }
             Page.REMOVED -> removedApps()
             Page.SHELF_APP -> shelfAppPicker()
+            Page.SHELF_DISPLAY -> shelfDisplayPicker()
         }
         list.post {
             val target = list.getChildAt(focusIndex.coerceIn(0, maxOf(list.childCount - 1, 0)))
@@ -332,16 +332,18 @@ class SettingsActivity : Activity() {
             startActivity(Intent(this, UpdateActivity::class.java))
         }
         section(I18n.text(R.string.i18n_settingsactivity_008))
-        row(I18n.text(R.string.dock_columns_title), I18n.text(R.string.dock_columns_description),
-            { prefs.dockColumns.toString() }) { prefs.dockColumns = DockLayout.next(prefs.dockColumns) }
+        row(getString(R.string.ui_resolution_title), getString(R.string.ui_resolution_desc), { UiResolution.describe(this) }) {}
+        choiceRow(I18n.text(R.string.dock_columns_title), I18n.text(R.string.dock_columns_description),
+            listOf(5, 6), { prefs.dockColumns }, { it.toString() }) { prefs.dockColumns = it }
+        choiceRow(getString(R.string.settings_performance), getString(R.string.settings_performance_help),
+            PerformancePolicy.profiles, { prefs.performanceProfile }, ::profileLabel,
+            detail = ::profileDescription, preview = { it to prefs.focusStyle }) { prefs.performanceProfile = it }
         row(I18n.text(R.string.i18n_settingsactivity_009), I18n.text(R.string.i18n_settingsactivity_010),
             { if (prefs.clock24) I18n.text(R.string.i18n_settingsactivity_011) else I18n.text(R.string.i18n_settingsactivity_012) }) { prefs.clock24 = !prefs.clock24 }
-        row(I18n.text(R.string.i18n_settingsactivity_013), I18n.text(R.string.i18n_settingsactivity_014), {
-            when (prefs.clockStyle) { Prefs.CLOCK_LARGE -> I18n.text(R.string.i18n_settingsactivity_015); Prefs.CLOCK_OFF -> I18n.text(R.string.i18n_settingsactivity_016); else -> I18n.text(R.string.i18n_settingsactivity_017) }
-        }) {
-            val opts = listOf(Prefs.CLOCK_CORNER, Prefs.CLOCK_LARGE, Prefs.CLOCK_OFF)
-            prefs.clockStyle = opts[(opts.indexOf(prefs.clockStyle) + 1) % opts.size]
-        }
+        choiceRow(I18n.text(R.string.i18n_settingsactivity_013), I18n.text(R.string.i18n_settingsactivity_014),
+            listOf(Prefs.CLOCK_CORNER, Prefs.CLOCK_LARGE, Prefs.CLOCK_OFF), { prefs.clockStyle }, { style ->
+                I18n.text(when (style) { Prefs.CLOCK_LARGE -> R.string.i18n_settingsactivity_015; Prefs.CLOCK_OFF -> R.string.i18n_settingsactivity_016; else -> R.string.i18n_settingsactivity_017 })
+            }) { prefs.clockStyle = it }
         if (backdropFile(this) != null) row(I18n.text(R.string.i18n_settingsactivity_018), I18n.text(R.string.i18n_settingsactivity_019), {
             if (prefs.settingsBg) I18n.text(R.string.i18n_settingsactivity_020) else I18n.text(R.string.i18n_settingsactivity_021)
         }) {
@@ -358,36 +360,52 @@ class SettingsActivity : Activity() {
             startActivity(Intent(this, WallpaperActivity::class.java).putExtra("upload_avatar", true))
         }
         row(I18n.text(R.string.i18n_settingsactivity_029), I18n.text(R.string.i18n_settingsactivity_030), { onOff(prefs.showAvatar) }, checked = { prefs.showAvatar }) { prefs.showAvatar = !prefs.showAvatar }
-        row(I18n.text(R.string.i18n_settingsactivity_031), I18n.text(R.string.i18n_settingsactivity_032) +
-            I18n.text(R.string.i18n_settingsactivity_033), {
-            auto(prefs.focusStyle, prefs.focusTvos(this), "tvOS", I18n.text(R.string.i18n_settingsactivity_034))
-        }) {
-            prefs.focusStyle = next(prefs.focusStyle, Prefs.FOCUS_TVOS, Prefs.FOCUS_SIMPLE)
+        choiceRow(I18n.text(R.string.i18n_settingsactivity_031), getString(R.string.settings_budget_note),
+            listOf(Prefs.AUTO, Prefs.FOCUS_TVOS, Prefs.FOCUS_SIMPLE), { prefs.focusStyle }, { style ->
+                when (style) { Prefs.FOCUS_TVOS -> "tvOS"; Prefs.FOCUS_SIMPLE -> I18n.text(R.string.i18n_settingsactivity_034); else -> I18n.text(R.string.media_quality_auto) }
+            }, preview = { prefs.performanceProfile to it }) { prefs.focusStyle = it }
+        choiceRow(I18n.text(R.string.i18n_settingsactivity_035), getString(R.string.settings_budget_note),
+            listOf(Prefs.AUTO, Prefs.CC_GLASS, Prefs.CC_PANEL), { prefs.ccStyle }, { style ->
+                I18n.text(when (style) { Prefs.CC_GLASS -> R.string.i18n_settingsactivity_038; Prefs.CC_PANEL -> R.string.i18n_settingsactivity_039; else -> R.string.media_quality_auto })
+            }) { prefs.ccStyle = it }
+        if (prefs.performanceProfile == PerformancePolicy.FULL) {
+            row(I18n.text(R.string.i18n_settingsactivity_159), getString(R.string.settings_extreme_help),
+                { onOff(prefs.extremeGlass) }, checked = { prefs.extremeGlass }) { prefs.extremeGlass = !prefs.extremeGlass }
+        } else {
+            row(I18n.text(R.string.i18n_settingsactivity_159), getString(R.string.settings_extreme_budget),
+                { profileLabel(prefs.performanceProfile) }, chevron = true) {
+                choose(getString(R.string.settings_performance), getString(R.string.settings_performance_help),
+                    PerformancePolicy.profiles, prefs.performanceProfile, ::profileLabel, ::profileDescription,
+                    preview = { it to prefs.focusStyle }) { prefs.performanceProfile = it }
+            }
         }
-        row(I18n.text(R.string.i18n_settingsactivity_035), I18n.text(R.string.i18n_settingsactivity_036) +
-            I18n.text(R.string.i18n_settingsactivity_037), {
-            auto(prefs.ccStyle, prefs.ccGlass(this), I18n.text(R.string.i18n_settingsactivity_038), I18n.text(R.string.i18n_settingsactivity_039))
-        }) {
-            prefs.ccStyle = next(prefs.ccStyle, Prefs.CC_GLASS, Prefs.CC_PANEL)
-        }
-        row(I18n.text(R.string.i18n_settingsactivity_159), I18n.text(R.string.i18n_settingsactivity_160),
-            { onOff(prefs.extremeGlass) }, checked = { prefs.extremeGlass }) {
-            prefs.extremeGlass = !prefs.extremeGlass
-        }
-        row(I18n.text(R.string.glass_light_tint), I18n.text(R.string.glass_tint_help),
-            { "${(prefs.glassLightTint * 100).toInt()}%" }) {
-            prefs.glassLightTint = if (prefs.glassLightTint >= 1.5f) 0f else prefs.glassLightTint + 0.25f
-        }
-        row(I18n.text(R.string.glass_dark_tint), I18n.text(R.string.glass_tint_help),
-            { "${(prefs.glassDarkTint * 100).toInt()}%" }) {
-            prefs.glassDarkTint = if (prefs.glassDarkTint >= 1.5f) 0f else prefs.glassDarkTint + 0.25f
-        }
+        val tints = listOf(0f, 0.25f, 0.5f, 0.75f, 1f, 1.25f, 1.5f)
+        choiceRow(I18n.text(R.string.glass_light_tint), I18n.text(R.string.glass_tint_help), tints,
+            { prefs.glassLightTint }, { "${(it * 100).toInt()}%" }) { prefs.glassLightTint = it }
+        choiceRow(I18n.text(R.string.glass_dark_tint), I18n.text(R.string.glass_tint_help), tints,
+            { prefs.glassDarkTint }, { "${(it * 100).toInt()}%" }) { prefs.glassDarkTint = it }
         row(I18n.text(R.string.glass_reduce_transparency), I18n.text(R.string.glass_reduce_transparency_help),
             { onOff(prefs.reduceGlassTransparency) }, checked = { prefs.reduceGlassTransparency }) {
             prefs.reduceGlassTransparency = !prefs.reduceGlassTransparency
         }
 
+        row(getString(R.string.settings_restore_appearance), getString(R.string.settings_restore_scope), { "" }, chevron = true) {
+            dialog(getString(R.string.settings_restore_appearance), getString(R.string.settings_restore_scope),
+                primary = getString(R.string.settings_restore_confirm), confirm = {
+                    val editor = getSharedPreferences("tvhome", MODE_PRIVATE).edit()
+                    SettingsChoice.appearanceKeys.forEach { editor.remove(it) }
+                    editor.apply()
+                    show(Page.MAIN, opener)
+                    true
+                })
+        }
+
         section(I18n.text(R.string.shelf_custom_section))
+        row(getString(R.string.settings_shelf_apps), getString(R.string.settings_shelf_apps_help), { "" }, chevron = true) { show(Page.SHELF_DISPLAY) }
+        row(getString(R.string.settings_shelf_rotation), getString(R.string.settings_shelf_rotation_help),
+            { onOff(prefs.shelfRotation) }, checked = { prefs.shelfRotation }) { prefs.shelfRotation = !prefs.shelfRotation }
+        choiceRow(getString(R.string.settings_shelf_interval), null, ShelfPresentation.intervals,
+            { prefs.shelfSeconds }, { getString(R.string.settings_seconds, it) }) { prefs.shelfSeconds = it }
         row(I18n.text(R.string.shelf_custom_url), I18n.text(R.string.shelf_custom_url_help),
             { shelfUrlLabel() }, chevron = true) { value ->
             editShelfUrl { value.text = shelfUrlLabel() }
@@ -459,26 +477,15 @@ class SettingsActivity : Activity() {
                 if (prefs.background == Wallpapers.MINE) it else I18n.text(R.string.i18n_settingsactivity_064, it)
             }
         }, chevron = true) { startActivity(Intent(this, WallpaperActivity::class.java)) }
-        row(I18n.text(R.string.media_quality_wall_title), I18n.text(R.string.media_quality_wall_desc), {
-            when (prefs.wallQuality) {
-                MediaQuality.UHD -> I18n.text(R.string.media_quality_4k)
-                MediaQuality.COMPAT -> I18n.text(R.string.media_quality_1080)
-                else -> I18n.text(R.string.media_quality_auto)
-            }
-        }) {
-            prefs.wallQuality = when (prefs.wallQuality) {
-                MediaQuality.AUTO -> MediaQuality.UHD
-                MediaQuality.UHD -> MediaQuality.COMPAT
-                else -> MediaQuality.AUTO
-            }
-            Thread {
-                runCatching { Wallpapers(applicationContext, Wallpapers.sourceFor(prefs.background)).refresh(force = true) }
-            }.start()
+        choiceRow(I18n.text(R.string.media_quality_wall_title), I18n.text(R.string.media_quality_wall_desc),
+            listOf(MediaQuality.AUTO, MediaQuality.UHD, MediaQuality.COMPAT), { prefs.wallQuality }, { quality ->
+                I18n.text(when (quality) { MediaQuality.UHD -> R.string.media_quality_4k; MediaQuality.COMPAT -> R.string.media_quality_1080; else -> R.string.media_quality_auto })
+            }) { quality ->
+            prefs.wallQuality = quality
+            Thread { runCatching { Wallpapers(applicationContext, Wallpapers.sourceFor(prefs.background)).refresh(force = true) } }.start()
         }
-        row(I18n.text(R.string.i18n_settingsactivity_065), I18n.text(R.string.i18n_settingsactivity_066), { minutesLabel(prefs.wallMinutes) }) {
-            val opts = listOf(15, 30, 60, 180, 1440)
-            prefs.wallMinutes = opts[(opts.indexOf(prefs.wallMinutes) + 1) % opts.size]
-        }
+        choiceRow(I18n.text(R.string.i18n_settingsactivity_065), I18n.text(R.string.i18n_settingsactivity_066),
+            listOf(15, 30, 60, 180, 1440), { prefs.wallMinutes }, ::minutesLabel) { prefs.wallMinutes = it }
         row(I18n.text(R.string.i18n_settingsactivity_067), I18n.text(R.string.i18n_settingsactivity_068),
             { I18n.text(R.string.i18n_settingsactivity_069, Wallpapers(this, Wallpapers.sourceFor(prefs.background)).files().size) }) { v ->
             v.text = I18n.text(R.string.i18n_settingsactivity_070)
@@ -489,44 +496,58 @@ class SettingsActivity : Activity() {
                 runOnUiThread { v.text = I18n.text(R.string.i18n_settingsactivity_071, w.files().size) }
             }.start()
         }
-        row(I18n.text(R.string.i18n_settingsactivity_072), I18n.text(R.string.i18n_settingsactivity_073),
-            { onOff(prefs.frameScreensaver) }, checked = { prefs.frameScreensaver }) { v ->
-            val on = !prefs.frameScreensaver
-            val current = Settings.Secure.getString(contentResolver, "screensaver_components").orEmpty()
-            val mine = "$packageName/${PhotoDream::class.java.name}"
-            // Whatever the TV had before goes back when the frame is turned off (Sony's own if unknown).
-            if (on && !current.startsWith(packageName)) prefs.prevScreensaver = current
-            val comp = if (on) mine else prefs.prevScreensaver.ifEmpty { SONY_DREAM }
-            v.text = I18n.text(R.string.i18n_settingsactivity_074)
-            Thread {
-                val ok = putSecure("screensaver_components", comp) && putSecure("screensaver_enabled", "1")
-                if (ok) prefs.frameScreensaver = on
-                runOnUiThread { v.text = if (ok) onOff(prefs.frameScreensaver) else I18n.text(R.string.i18n_settingsactivity_075) }
-            }.start()
+        row(getString(R.string.system_screensaver_title), getString(R.string.system_screensaver_desc),
+            { onOff(prefs.systemScreensaver) }, checked = { prefs.systemScreensaver }) {
+            prefs.systemScreensaver = !prefs.systemScreensaver
+            SystemScreensaver.enforce(this)
+            show(Page.MAIN, list.indexOfChild(it.parent as View))
         }
-        row(I18n.text(R.string.i18n_settingsactivity_076), I18n.text(R.string.i18n_settingsactivity_077),
-            { if (prefs.saverMode == Prefs.SAVER_AERIAL) I18n.text(R.string.i18n_settingsactivity_078) else I18n.text(R.string.i18n_settingsactivity_079) }) {
-            prefs.saverMode = if (prefs.saverMode == Prefs.SAVER_AERIAL) Prefs.SAVER_PHOTOS else Prefs.SAVER_AERIAL
-        }
-        row(I18n.text(R.string.media_quality_aerial_title), I18n.text(R.string.media_quality_aerial_desc), {
-            when (prefs.aerialQuality) {
-                MediaQuality.UHD -> I18n.text(R.string.media_quality_4k)
-                MediaQuality.COMPAT -> I18n.text(R.string.media_quality_compat)
-                else -> I18n.text(R.string.media_quality_auto)
+        if (prefs.systemScreensaver) {
+            row(getString(R.string.system_screensaver_settings), getString(R.string.system_screensaver_settings_desc), { "" }, chevron = true) {
+                SystemScreensaver.openSettings(this)
             }
-        }) {
-            prefs.aerialQuality = when (prefs.aerialQuality) {
-                MediaQuality.AUTO -> MediaQuality.UHD
-                MediaQuality.UHD -> MediaQuality.COMPAT
-                else -> MediaQuality.AUTO
+        } else {
+            row(I18n.text(R.string.i18n_settingsactivity_072), I18n.text(R.string.i18n_settingsactivity_073),
+                { onOff(prefs.frameScreensaver) }, checked = { prefs.frameScreensaver }) { v ->
+                val on = !prefs.frameScreensaver
+                val current = Settings.Secure.getString(contentResolver, "screensaver_components").orEmpty()
+                val mine = "$packageName/${PhotoDream::class.java.name}"
+                // Stop guarding immediately, even when the system selection was changed elsewhere.
+                if (!on) {
+                    prefs.frameScreensaver = false
+                    v.text = onOff(false)
+                    if (current.split(':').none { it.substringBefore('/') == packageName }) return@row
+                }
+                // Only restore a recorded installed dream, never a guessed vendor component.
+                if (on && !current.startsWith(packageName)) prefs.prevScreensaver = current
+                val valid = prefs.prevScreensaver.split(':').filter { entry ->
+                    val component = android.content.ComponentName.unflattenFromString(entry) ?: return@filter false
+                    runCatching { packageManager.getServiceInfo(component, 0).enabled }.getOrDefault(false)
+                }.toSet()
+                val comp = if (on) mine else SystemScreensaverPolicy.restore(current, prefs.prevScreensaver, packageName, valid)
+                if (comp == null) { SystemScreensaver.openSettings(this); return@row }
+                v.text = I18n.text(R.string.i18n_settingsactivity_074)
+                Thread {
+                    val ok = putSecure("screensaver_components", comp) && putSecure("screensaver_enabled", "1")
+                    if (ok) prefs.frameScreensaver = on
+                    runOnUiThread { v.text = if (ok) onOff(prefs.frameScreensaver) else I18n.text(R.string.i18n_settingsactivity_075) }
+                }.start()
             }
-        }
-        row(I18n.text(R.string.i18n_settingsactivity_080), I18n.text(R.string.i18n_settingsactivity_081), { minutesLabel(prefs.frameIdleMinutes) }) {
-            prefs.frameIdleMinutes = FrameIdlePolicy.nextMinutes(prefs.frameIdleMinutes)
-        }
-        row(I18n.text(R.string.i18n_settingsactivity_084), I18n.text(R.string.i18n_settingsactivity_085), { I18n.text(R.string.i18n_settingsactivity_086, prefs.frameSeconds) }) {
-            val opts = listOf(15, 30, 60, 120)
-            prefs.frameSeconds = opts[(opts.indexOf(prefs.frameSeconds) + 1) % opts.size]
+            row(I18n.text(R.string.i18n_settingsactivity_076), I18n.text(R.string.i18n_settingsactivity_077),
+                { if (prefs.saverMode == Prefs.SAVER_AERIAL) I18n.text(R.string.i18n_settingsactivity_078) else I18n.text(R.string.i18n_settingsactivity_079) }) {
+                prefs.saverMode = if (prefs.saverMode == Prefs.SAVER_AERIAL) Prefs.SAVER_PHOTOS else Prefs.SAVER_AERIAL
+            }
+            choiceRow(I18n.text(R.string.media_quality_aerial_title), I18n.text(R.string.media_quality_aerial_desc),
+                listOf(MediaQuality.AUTO, MediaQuality.UHD, MediaQuality.COMPAT), { prefs.aerialQuality }, { quality ->
+                    I18n.text(when (quality) { MediaQuality.UHD -> R.string.media_quality_4k; MediaQuality.COMPAT -> R.string.media_quality_compat; else -> R.string.media_quality_auto })
+                }) { prefs.aerialQuality = it }
+            row(I18n.text(R.string.i18n_settingsactivity_080), I18n.text(R.string.i18n_settingsactivity_081), { minutesLabel(prefs.frameIdleMinutes) }) {
+                prefs.frameIdleMinutes = FrameIdlePolicy.nextMinutes(prefs.frameIdleMinutes)
+            }
+            row(I18n.text(R.string.i18n_settingsactivity_084), I18n.text(R.string.i18n_settingsactivity_085), { I18n.text(R.string.i18n_settingsactivity_086, prefs.frameSeconds) }) {
+                val opts = listOf(15, 30, 60, 120)
+                prefs.frameSeconds = opts[(opts.indexOf(prefs.frameSeconds) + 1) % opts.size]
+            }
         }
 
         section(I18n.text(R.string.i18n_settingsactivity_087))
@@ -640,6 +661,108 @@ class SettingsActivity : Activity() {
         }
     }
 
+    private fun profileLabel(profile: String) = getString(when (profile) {
+        PerformancePolicy.SMOOTH -> R.string.settings_profile_smooth
+        PerformancePolicy.FULL -> R.string.settings_profile_full
+        else -> R.string.settings_profile_balanced
+    })
+
+    private fun profileDescription(profile: String) = getString(when (profile) {
+        PerformancePolicy.SMOOTH -> R.string.settings_profile_smooth_desc
+        PerformancePolicy.FULL -> R.string.settings_profile_full_desc
+        else -> R.string.settings_profile_balanced_desc
+    })
+
+    private fun <T> choiceRow(title: String, description: String?, options: List<T>, current: () -> T,
+                              label: (T) -> String, detail: (T) -> String = { "" },
+                              preview: ((T) -> Pair<String, String>)? = null, save: (T) -> Unit) {
+        row(title, description, { label(current()) }, chevron = true) {
+            choose(title, description, options, current(), label, detail, preview, save)
+        }
+    }
+
+    /** Selection is staged locally; Back and Cancel never write preferences. */
+    private fun <T> choose(title: String, description: String?, options: List<T>, current: T,
+                           label: (T) -> String, detail: (T) -> String = { "" },
+                           preview: ((T) -> Pair<String, String>)? = null, save: (T) -> Unit) {
+        if (options.isEmpty()) return
+        val selected = SettingsChoice(options, current)
+        val returnPage = page
+        val returnIndex = (currentFocus?.let { list.indexOfChild(it) } ?: opener).coerceAtLeast(0)
+        val body = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
+        val sample = if (preview != null) FrameLayout(this).apply {
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                intArrayOf(0xff284b83.toInt(), 0xff684467.toInt(), 0xff17283c.toInt()))
+            clipChildren = false
+            addView(text(12f, Color.WHITE).apply { text = getString(R.string.settings_preview_note) },
+                FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM).apply {
+                    leftMargin = dp(12); rightMargin = dp(12); bottomMargin = dp(8)
+                })
+        } else null
+        val tile = sample?.let { panel -> text(17f, Color.WHITE, weight = 600).apply {
+            text = getString(R.string.settings_preview_tile)
+            gravity = Gravity.CENTER
+            panel.addView(this, FrameLayout.LayoutParams(dp(126), dp(48), Gravity.CENTER))
+        } }
+        fun render(value: T) {
+            val (profile, focus) = preview?.invoke(value) ?: return
+            val decorative = focus == Prefs.FOCUS_TVOS || (focus == Prefs.AUTO && !Device.isLowEnd(this))
+            val look = SettingPreviewPolicy.sample(profile, decorative)
+            tile?.apply {
+                animate().cancel()
+                background = android.graphics.drawable.GradientDrawable(
+                    android.graphics.drawable.GradientDrawable.Orientation.TL_BR,
+                    if (look.glass) intArrayOf(0x99e4f5ff.toInt(), 0x445ca2b5) else intArrayOf(0xff344154.toInt(), 0xff344154.toInt())
+                ).apply { cornerRadius = dp(12).toFloat(); setStroke(dp(if (look.extremeGlass) 2 else 1), Color.WHITE) }
+                rotationY = look.tiltDegrees
+                animate().scaleX(look.scale).scaleY(look.scale).translationY(-dp(look.liftDp).toFloat()).rotationY(0f)
+                    .setDuration(look.durationMs).start()
+            }
+        }
+        render(options[selected.initialIndex])
+        var initial: View? = null
+        fun commit(): Boolean {
+            save(selected.value)
+            show(returnPage, returnIndex)
+            return true
+        }
+        options.forEachIndexed { index, option ->
+            val entry = text(16f, Color.WHITE, weight = 500).apply {
+                text = (if (option == current) "✓  " else "    ") + label(option) +
+                    detail(option).takeIf { it.isNotBlank() }?.let { "\n$it" }.orEmpty()
+                setLineSpacing(dp(3).toFloat(), 1f)
+                isFocusable = true
+                isClickable = true
+                setPadding(dp(14), dp(12), dp(14), dp(12))
+                setOnFocusChangeListener { _, focused -> if (focused) { selected.select(index); render(option) } }
+                setOnClickListener { selected.select(index); if (commit()) activeDialog?.dismiss() }
+            }
+            body.addView(entry, LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(8) })
+            if (index == selected.initialIndex) initial = entry
+        }
+        dialog(title, description, body, primary = getString(R.string.settings_apply), initialFocus = initial, preview = sample, confirm = ::commit)
+    }
+
+    private fun shelfDisplayPicker() {
+        heading.text = getString(R.string.settings_shelf_apps)
+        about.text = getString(R.string.settings_shelf_apps_help)
+        val custom = Shelf.Custom(prefs.shelfCustomPkg, prefs.shelfCustomUrl)
+        val apps = repo.allApps().filter { !repo.isOwn(it.pkg) && Shelf.has(it.pkg, custom) }.sortedBy { it.label }
+        if (apps.isEmpty()) {
+            information(getString(R.string.settings_shelf_apps), getString(R.string.settings_shelf_empty))
+            return
+        }
+        for (app in apps) {
+            choiceRow(app.label, app.pkg, listOf(true, false),
+                { app.pkg !in prefs.shelfWallpaperPackages },
+                { getString(if (it) R.string.settings_shelf_recommendations else R.string.settings_shelf_wallpaper) }) { recommended ->
+                prefs.shelfWallpaperPackages = if (recommended) prefs.shelfWallpaperPackages - app.pkg
+                    else prefs.shelfWallpaperPackages + app.pkg
+            }
+        }
+    }
+
     /** One dock app. The shelf appears when that tile is focused in the first row. */
     private fun shelfAppPicker() {
         heading.text = I18n.text(R.string.shelf_custom_app)
@@ -750,10 +873,11 @@ class SettingsActivity : Activity() {
     private fun dialog(title: String, message: String? = null, body: View? = null,
                        compact: Boolean = false, primary: String = getString(android.R.string.ok),
                        secondary: String = getString(android.R.string.cancel),
-                       secondaryAction: (() -> Unit)? = null, confirm: () -> Boolean = { true }) {
+                       secondaryAction: (() -> Unit)? = null, initialFocus: View? = null,
+                       preview: View? = null, confirm: () -> Boolean = { true }) {
         activeDialog?.dismiss()
         activeDialog = SettingsDialog(this, scene ?: Backgrounds.render("graphite"), title,
-            message, body, compact, primary, confirm, secondary, secondaryAction).also { it.show() }
+            message, body, compact, primary, confirm, secondary, secondaryAction, initialFocus, preview).also { it.show() }
     }
 
     /** Search only after the user selects Search; the platform owns the TV keyboard. */
@@ -977,13 +1101,6 @@ class SettingsActivity : Activity() {
     }
 
     private fun onOff(b: Boolean) = if (b) I18n.text(R.string.i18n_settingsactivity_152) else I18n.text(R.string.i18n_settingsactivity_153)
-
-    /** I18n.text(R.string.i18n_settingsactivity_154) with what auto picks on this TV, or the forced choice. */
-    private fun auto(pref: String, on: Boolean, yes: String, no: String) =
-        if (pref == Prefs.AUTO) I18n.text(R.string.i18n_settingsactivity_155, if (on) yes else no) else if (on) yes else no
-
-    /** The next of 自动 → [a] → [b]. */
-    private fun next(pref: String, a: String, b: String) = when (pref) { Prefs.AUTO -> a; a -> b; else -> Prefs.AUTO }
 
     /** A secure setting, written directly once WRITE_SECURE_SETTINGS is granted, otherwise through local adb. Blocking. */
     private fun putSecure(key: String, value: String): Boolean =

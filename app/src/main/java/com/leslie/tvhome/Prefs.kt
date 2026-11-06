@@ -4,7 +4,7 @@ import android.content.Context
 import android.content.SharedPreferences
 
 /**
- * What the TV can afford. Low-end TVs (little memory, or Android 9/10, which ship on older chips)
+ * What the TV can afford. Low-end TVs (little memory or few cores)
  * get the cheaper look by default; every such default can be changed in 主屏幕设置.
  */
 object Device {
@@ -13,14 +13,33 @@ object Device {
     fun isLowEnd(ctx: Context): Boolean = lowEnd ?: run {
         val am = ctx.getSystemService(android.app.ActivityManager::class.java)
         val mem = android.app.ActivityManager.MemoryInfo().also { am.getMemoryInfo(it) }
-        (am.isLowRamDevice || mem.totalMem < 2_500L * 1024 * 1024 || android.os.Build.VERSION.SDK_INT < 30 ||
-            Runtime.getRuntime().availableProcessors() < 4).also { lowEnd = it }
+        PerformancePolicy.constrained(am.isLowRamDevice, mem.totalMem,
+            Runtime.getRuntime().availableProcessors()).also { lowEnd = it }
     }
 }
 
 /** All user settings in one place. */
 class Prefs(ctx: Context) {
     private val sp: SharedPreferences = ctx.getSharedPreferences("tvhome", Context.MODE_PRIVATE)
+
+    var performanceProfile: String
+        get() = PerformancePolicy.normalized(sp.getString("performance_profile",
+            if (sp.getBoolean("extreme_glass", false)) PerformancePolicy.FULL else PerformancePolicy.BALANCED)!!)
+        set(v) = sp.edit().putString("performance_profile", PerformancePolicy.normalized(v)).apply()
+
+    internal val effects get() = PerformancePolicy.effects(performanceProfile)
+
+    var shelfWallpaperPackages: Set<String>
+        get() = sp.getStringSet("shelf_wallpaper_packages", emptySet())!!.toSet()
+        set(v) = sp.edit().putStringSet("shelf_wallpaper_packages", v.toSet()).apply()
+
+    var shelfRotation: Boolean
+        get() = sp.getBoolean("shelf_rotation", true)
+        set(v) = sp.edit().putBoolean("shelf_rotation", v).apply()
+
+    var shelfSeconds: Int
+        get() = ShelfPresentation.seconds(sp.getInt("shelf_seconds", 8))
+        set(v) = sp.edit().putInt("shelf_seconds", ShelfPresentation.seconds(v)).apply()
 
     fun observe(listener: SharedPreferences.OnSharedPreferenceChangeListener) = sp.registerOnSharedPreferenceChangeListener(listener)
     fun unobserve(listener: SharedPreferences.OnSharedPreferenceChangeListener) = sp.unregisterOnSharedPreferenceChangeListener(listener)
@@ -123,8 +142,12 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putInt("frame_idle_minutes", FrameIdlePolicy.minutes(v)).apply()
 
     /** The photo frame is the system screensaver (instead of Sony's). */
+    var systemScreensaver: Boolean
+        get() = sp.getBoolean("system_screensaver", true)
+        set(v) = sp.edit().putBoolean("system_screensaver", v).apply()
+
     var frameScreensaver: Boolean
-        get() = sp.getBoolean("frame_screensaver", false)
+        get() = !systemScreensaver && sp.getBoolean("frame_screensaver", false)
         set(v) = sp.edit().putBoolean("frame_screensaver", v).apply()
 
     /** Preinstalled apps removed for this user from the long-press menu; restorable in settings. */
@@ -236,7 +259,7 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putString("cc_style", v).apply()
 
     /** The Control Center uses floating glass controls rather than one plain panel. */
-    fun ccGlass(ctx: Context) = when (ccStyle) {
+    fun ccGlass(ctx: Context) = effects.glass && when (ccStyle) {
         CC_GLASS -> true
         CC_PANEL -> false
         // Extreme glass has no meaning on the plain panel, so auto follows it.
@@ -248,7 +271,7 @@ class Prefs(ctx: Context) {
      * model. Off by default; intended for a TV whose GPU can sustain it.
      */
     var extremeGlass: Boolean
-        get() = sp.getBoolean("extreme_glass", false)
+        get() = effects.extremeGlass && sp.getBoolean("extreme_glass", true)
         set(v) = sp.edit().putBoolean("extreme_glass", v).apply()
 
     var glassLightTint: Float
@@ -280,7 +303,7 @@ class Prefs(ctx: Context) {
         get() = sp.getString("focus_style", AUTO)!!
         set(v) = sp.edit().putString("focus_style", v).apply()
 
-    fun focusTvos(ctx: Context) = when (focusStyle) { FOCUS_TVOS -> true; FOCUS_SIMPLE -> false; else -> !Device.isLowEnd(ctx) }
+    fun focusTvos(ctx: Context) = effects.tiltDegrees > 0 && when (focusStyle) { FOCUS_TVOS -> true; FOCUS_SIMPLE -> false; else -> !Device.isLowEnd(ctx) }
 
     /** When the boot animation plays: [INTRO_OFF], [INTRO_BOOT] (after a cold boot) or [INTRO_WAKE] (also on wake from standby). */
     var intro: String

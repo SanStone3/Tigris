@@ -31,12 +31,8 @@
     <string name="i18n_settingsactivity_029" formatted="false">Show avatar in the top-right corner</string>
     <string name="i18n_settingsactivity_030" formatted="false">Press the avatar in the top-right corner to open Home Screen Settings.</string>
     <string name="i18n_settingsactivity_031" formatted="false">Focus animation</string>
-    <string name="i18n_settingsactivity_032" formatted="false">tvOS: the selected app grows, tilts with the direction and catches a highlight. Simple: it only grows.</string>
-    <string name="i18n_settingsactivity_033" formatted="false">\n“Auto” uses Simple on lower-end TVs.</string>
     <string name="i18n_settingsactivity_034" formatted="false">Simple</string>
     <string name="i18n_settingsactivity_035" formatted="false">Control Center style</string>
-    <string name="i18n_settingsactivity_036" formatted="false">Glass: frosted glass that shows the image behind, and the selected button lights up its neighbours. Panel: the earlier dark panel, easier on performance.</string>
-    <string name="i18n_settingsactivity_037" formatted="false">\n“Auto” uses Panel on lower-end TVs.</string>
     <string name="i18n_settingsactivity_038" formatted="false">Glass</string>
     <string name="i18n_settingsactivity_039" formatted="false">Panel</string>
     <string name="i18n_settingsactivity_040" formatted="false">Boot animation</string>
@@ -151,13 +147,10 @@
     <string name="i18n_settingsactivity_151" formatted="false">Please check</string>
     <string name="i18n_settingsactivity_152" formatted="false">On</string>
     <string name="i18n_settingsactivity_153" formatted="false">Off</string>
-    <string name="i18n_settingsactivity_154" formatted="false">Auto (…)</string>
-    <string name="i18n_settingsactivity_155">Auto (%1$s)</string>
     <string name="i18n_settingsactivity_156" formatted="false">Daily</string>
     <string name="i18n_settingsactivity_157">%1$s h</string>
     <string name="i18n_settingsactivity_158">%1$s min</string>
     <string name="i18n_settingsactivity_159" formatted="false">Extreme Liquid Glass</string>
-    <string name="i18n_settingsactivity_160" formatted="false">Refraction and dispersion over still backgrounds; video passes directly through transparent glass with rim light. Recommended for high-performance TVs.</string>
     <string name="glass_light_tint">Glass tint · light mode</string>
     <string name="glass_dark_tint">Glass tint · dark mode</string>
     <string name="glass_tint_help">Adjust tint from 0% to 150%. 100% is the reference material; 0% keeps the blur, lens and edge light.</string>

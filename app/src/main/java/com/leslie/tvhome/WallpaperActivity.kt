@@ -30,6 +30,8 @@ class WallpaperActivity : Activity() {
     private lateinit var qr: ImageView
     private lateinit var address: TextView
     private var counts = ""
+    private lateinit var themeGrid: LinearLayout
+    private val solidKey = "wallpaper-solid-picker"
 
     private inner class Card(val key: String) : LinearLayout(this@WallpaperActivity) {
         val image = ImageView(context).apply {
@@ -78,21 +80,45 @@ class WallpaperActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val grid = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
-        val keys = VideoWallpaper.SOURCES + Wallpapers.SOURCES + Backgrounds.THEMES.keys
-        for (row in keys.chunked(4)) {
-            val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
-            for (k in row) {
-                val c = Card(k)
-                cards[k] = c
-                r.addView(c, LinearLayout.LayoutParams(dp(128), -2).apply { marginEnd = dp(16) })
+        fun addCards(parent: LinearLayout, keys: List<String>) {
+            for (row in keys.chunked(4)) {
+                val r = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; clipChildren = false }
+                for (k in row) {
+                    val c = Card(k)
+                    cards[k] = c
+                    r.addView(c, LinearLayout.LayoutParams(dp(128), -2).apply { marginEnd = dp(16) })
+                }
+                parent.addView(r, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(14) })
             }
-            grid.addView(r, LinearLayout.LayoutParams(-2, -2).apply { bottomMargin = dp(14) })
         }
+        fun section() = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; clipChildren = false }
+        fun toggle(label: Int, content: LinearLayout) = text(15f, Color.WHITE).apply {
+            fun updateLabel() { text = (if (content.visibility == View.VISIBLE) "▾ " else "▸ ") + I18n.text(label) }
+            updateLabel()
+            isFocusable = true
+            isClickable = true
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = rounded(Color.argb(30, 255, 255, 255), dp(10).toFloat())
+            setOnFocusChangeListener { view, focused -> view.alpha = if (focused) 1f else 0.65f }
+            setOnClickListener {
+                content.visibility = if (content.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+                updateLabel()
+            }
+        }
+        addCards(grid, listOf(Wallpapers.BING, Wallpapers.MINE, Wallpapers.CUSTOM, solidKey))
+        themeGrid = section().apply { visibility = if (prefs.background in Backgrounds.THEMES) View.VISIBLE else View.GONE }
+        addCards(themeGrid, Backgrounds.THEMES.keys.toList())
+        grid.addView(themeGrid)
+        val moreKeys = VideoWallpaper.SOURCES + Wallpapers.SOURCES.filter { it !in listOf(Wallpapers.BING, Wallpapers.MINE, Wallpapers.CUSTOM) }
+        val more = section().apply { visibility = if (prefs.background in moreKeys) View.VISIBLE else View.GONE }
+        addCards(more, moreKeys)
+        grid.addView(toggle(R.string.wallpaper_more_sources, more), LinearLayout.LayoutParams(-1, -2).apply { bottomMargin = dp(14) })
+        grid.addView(more)
         val left = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             clipChildren = false
             addView(text(30f, bold = true).apply { text = I18n.text(R.string.i18n_wallpaperactivity_001) })
-            addView(text(15f, Color.argb(160, 255, 255, 255)).apply { text = I18n.text(R.string.i18n_wallpaperactivity_002) },
+            addView(text(15f, Color.argb(160, 255, 255, 255)).apply { text = I18n.text(R.string.wallpaper_quality_note) },
                 LinearLayout.LayoutParams(-2, -2).apply { topMargin = dp(8); bottomMargin = dp(22) })
             addView(android.widget.ScrollView(this@WallpaperActivity).apply { clipToPadding = false; addView(grid) }, LinearLayout.LayoutParams(-1, 0, 1f))
         }
@@ -156,7 +182,7 @@ class WallpaperActivity : Activity() {
     /** Follows the phone: a new choice moves the check mark, new photos redraw the previews. */
     private val poll = object : Runnable {
         override fun run() {
-            cards.forEach { (k, c) -> c.selected(k == prefs.background) }
+            cards.forEach { (k, c) -> c.selected(k == prefs.background || (k == solidKey && prefs.background in Backgrounds.THEMES)) }
             io.execute {
                 val now = Wallpapers.SOURCES.joinToString { s -> Wallpapers(this@WallpaperActivity, s).files().firstOrNull()?.name + Wallpapers(this@WallpaperActivity, s).files().size }
                 if (now != counts) { counts = now; loadPreviews() }
@@ -185,6 +211,11 @@ class WallpaperActivity : Activity() {
             }
             main.post { cards[s]?.apply { image.setImageBitmap(bmp); this.label.text = label; emptyText(empty) } }
         }
+        main.post { cards[solidKey]?.apply {
+            image.setImageBitmap(Backgrounds.render(prefs.background.takeIf { it in Backgrounds.THEMES } ?: "graphite"))
+            label.text = I18n.text(R.string.wallpaper_solid_colors)
+            emptyText(null)
+        } }
         for ((k, v) in Backgrounds.THEMES) {
             val bmp: Bitmap = Backgrounds.render(k)
             main.post { cards[k]?.apply { image.setImageBitmap(bmp); label.text = v.first; emptyText(null) } }
@@ -192,6 +223,11 @@ class WallpaperActivity : Activity() {
     }
 
     private fun pick(key: String) {
+        if (key == solidKey) {
+            themeGrid.visibility = if (themeGrid.visibility == View.VISIBLE) View.GONE else View.VISIBLE
+            if (themeGrid.visibility == View.VISIBLE) cards[prefs.background.takeIf { it in Backgrounds.THEMES } ?: "graphite"]?.requestFocus()
+            return
+        }
         if (key == VideoWallpaper.LOCAL && MediaFiles.wallpaper(this) == null) {
             Toast.makeText(this, I18n.text(R.string.live_wallpaper_upload), Toast.LENGTH_LONG).show()
             return
@@ -203,7 +239,7 @@ class WallpaperActivity : Activity() {
             }
         }
         prefs.background = key
-        cards.forEach { (k, c) -> c.selected(k == key) }
+        cards.forEach { (k, c) -> c.selected(k == key || (k == solidKey && key in Backgrounds.THEMES)) }
         io.execute { Wallpapers.trimExcept(this, key) }
         if (key in Wallpapers.SOURCES && Wallpapers(this, key).files().isEmpty()) io.execute {
             Wallpapers(this, key).refresh(force = true)

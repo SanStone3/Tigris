@@ -6,6 +6,9 @@
     <string name="i18n_shelf_004">%1$s · %2$s · %3$s popularity</string>
     <string name="i18n_shelf_005">%1$.1fM</string>
     <string name="i18n_shelf_006">%1$.1fK</string>
+    <string name="shelf_mango_source">Mango TV · Popular dramas</string>
+    <string name="shelf_youku_source">Youku · Featured</string>
+    <string name="shelf_tencent_source">Tencent Video · Featured</string>
     <string name="shelf_custom_section">Top Shelf</string>
     <string name="shelf_custom_url">Custom source</string>
     <string name="shelf_custom_url_help">Shown when the linked app is focused in the first dock row. A bad address, unusable JSON, or a timeout keeps the built-in shelf for that app when one exists.</string>

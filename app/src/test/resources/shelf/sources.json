@@ -1,0 +1,33 @@
+{
+  "checkedAt": "2026-11-06",
+  "fixtures": "Public anonymous responses, reduced to parser fields; tracking and request fields removed. Programme IDs required by the parser are retained. No account cookies.",
+  "youku": {
+    "page": "https://pd.youku.com/CIBN?screen=phone",
+    "apk": "https://gtvappstore.alicdn.com/tvapp3/apks/20250603/20250603-ccb2a058-f819-4ee3-a3b2-45910b1fd637.apk",
+    "manifestPackage": "com.cibn.tv"
+  },
+  "iqiyi": {
+    "page": "https://www.iqiyi.com/appstore.html",
+    "apk": "https://app.iqiyi.com/lequ/20260908/qiyiguo_official16.9.0.apk",
+    "manifestPackage": "com.gitvdemo.video",
+    "anonymousRankApi": "https://mesh.if.iqiyi.com/portal/pcw/rankList/comRankList",
+    "apiObserved": "HTTP 200, code 0, data.items []",
+    "enabled": false,
+    "reason": "Official ranking images were only 260x360 portraits. A final anonymous GET of https://www.iqiyi.com/ returned HTTP 200, 8932 bytes, without hero image data (image_url_pcw, bigPic, or 1920). No clear landscape source was verified; leave wallpaper visible. No transformed image URL was invented."
+  },
+  "tencent": {
+    "page": "https://tv.qq.com/",
+    "apk": "https://dldir1.qq.com/qqmi/kt/snm/video/tv_video_4.7.0.1023_android_16118.apk",
+    "manifestPackage": "com.ktcp.video"
+  },
+  "mango": {
+    "packageEvidence": "https://tc.coocaa.ottcn.com/appstore/appstorev3/thirdAppVersion?pkgs=%5Bcom.hunantv.market%5D",
+    "observed": {
+      "appName": "芒果TV",
+      "appPackage": "com.hunantv.market"
+    },
+    "webBundle": "https://static.hitv.com/pc/25.0986699.js",
+    "channelConfig": "https://pianku.api.mgtv.com/rider/config/channel/v1?channelId=2&platform=pcweb",
+    "sort": "c2 = 最热"
+  }
+}

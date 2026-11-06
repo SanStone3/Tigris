@@ -22,7 +22,7 @@ import java.net.URL
  * is downloaded each time the home screen or the photo frame moves on ([advance], [next]). The
  * day's dozen used up, they go round the ones already here. Pictures older than [KEEP_DAYS] days
  * and any past [MAX_FILES] are deleted, keeping the newest [MIN_FILES]. Each source has its folder:
- * - [BING]: Bing's daily photos (cn.bing.com works without a VPN), the last ~15 days listed.
+ * - [BING]: Bing's daily photos (cn.bing.com works without a VPN), unique archive results.
  * - [ANIME]: the month's most popular anime wallpapers on Wallhaven, SFW only; 360's and alcy's
  *   anime when Wallhaven can't be reached.
  * - [SCENERY], [FRESH], [ART]: picture feeds (360's wallpaper categories, Wallhaven, the
@@ -87,7 +87,12 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         var ok = true
         synchronized(lock) {
             val q = readQueue()
-            val signature = if (source == WALLHAVEN) wallhavenUrl() else ""
+            val signature = when (source) {
+                WALLHAVEN -> wallhavenUrl()
+                BING -> BingWallpaperPolicy.signature(Prefs(ctx).wallQuality, MediaQuality.uhdWallpapers(ctx))
+                else -> ""
+            }
+            val qualityChanged = source == BING && q?.optString("query") != signature
             if (force || q == null || q.optString("query") != signature || System.currentTimeMillis() - q.optLong("made") > 20 * 3_600_000L) {
                 val now = System.currentTimeMillis()
                 // Bound failed or repeated manual API requests; cached photos remain usable.
@@ -98,6 +103,11 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
                         val next = list().put("query", signature)
                         if (source == WALLHAVEN) check(next.getJSONArray("items").length() > 0) { "No matching wallpapers" }
                         queueFile.writeText(next.toString())
+                        if (qualityChanged) {
+                            // The old image stays available offline, but cannot prevent a quality upgrade.
+                            download()?.let { showFile.writeText(it.name) }
+                            slotFile.delete()
+                        }
                     }.onFailure { Log.w("Wallpapers", "list failed", it) }.isSuccess
                 }
             }
@@ -136,26 +146,31 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
             else -> listLinks(feeds(source, day), items)
         }
         return JSONObject().put("made", System.currentTimeMillis()).put("taken", 0).put("items", items)
-            .put("total", if (source == CUSTOM) Int.MAX_VALUE else PER_DAY)
+            .put("total", when (source) { CUSTOM -> Int.MAX_VALUE; BING -> items.length(); else -> PER_DAY })
     }
 
     private fun item(url: String, caption: String) = JSONObject().put("url", url).put("caption", caption)
 
     private fun listBing(items: JSONArray) {
         val uhd = MediaQuality.uhdWallpapers(ctx)
+        val seenDates = mutableSetOf<String>()
+        val seenImages = mutableSetOf<String>()
+        // Archive windows overlap; the actual response determines how many unique photos exist.
         for (idx in listOf(0, 7)) {
             val json = get("https://cn.bing.com/HPImageArchive.aspx?format=js&idx=$idx&n=8&mkt=zh-CN").decodeToString()
             val imgs = JSONObject(json).getJSONArray("images")
             for (i in 0 until imgs.length()) {
                 val o = imgs.getJSONObject(i)
+                val date = o.optString("startdate")
+                val base = o.optString("urlbase")
+                if (!BingWallpaperPolicy.include(date, base, seenDates, seenImages)) continue
                 val title = o.optString("title")
                 val copy = o.optString("copyright")
-                val base = "https://cn.bing.com" + o.getString("urlbase")
                 val caption = if (title.isNotEmpty() && !copy.startsWith(title)) "$title — $copy" else copy
-                val standard = base + "_1920x1080.jpg"
-                items.put(item(if (uhd) base + "_UHD.jpg" else standard, caption)
-                    .apply { if (uhd) put("fallback", standard) }
-                    .put("name", o.getString("startdate") + (if (uhd) "-uhd.jpg" else ".jpg")))
+                val urls = BingWallpaperPolicy.candidates(base, uhd)
+                items.put(item(urls.first(), caption).put("date", date)
+                    .put("quality", if (uhd) "uhd" else "hd")
+                    .apply { urls.getOrNull(1)?.let { put("fallback", it) } })
             }
         }
     }
@@ -223,6 +238,7 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         if (id != null && (0 until ids.length()).any { ids.getString(it) == id }) return null
         val given = o.optString("name").ifEmpty { null }
         if (given != null && File(dir, given).exists()) return null
+        if (source == BING && o.has("date")) return takeBing(o, meta)
         // Bing does not provide UHD for every date. A missing UHD falls back to the existing
         // 1080p file; no stale failed download is cached.
         val bytes = runCatching { fetch(o.getString("url")).first }.getOrElse { error ->
@@ -243,6 +259,23 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         return File(dir, name)
     }
 
+    /** Candidate URLs do not prove resolution: name and caption describe the saved bitmap. */
+    private fun takeBing(o: JSONObject, meta: JSONObject): File? {
+        // A previous UHD fallback is retried on the next archive refresh, never treated as 4K.
+        files().firstOrNull {
+            BingWallpaperPolicy.canReuse(it.name, o.getString("date"), o.getString("quality"))
+        }?.let { return it }
+        val candidates = listOf(o.getString("url"), o.optString("fallback")).filter { it.isNotEmpty() }
+        val decoded = BingWallpaperPolicy.firstUsable(candidates) { url ->
+            fitScreen(fetch(url).first)
+        } ?: return null
+        val name = BingWallpaperPolicy.cacheName(o.getString("date"), o.getString("quality"), decoded.width, decoded.height)
+        val resolution = "${decoded.width}×${decoded.height}"
+        if (!save(decoded, name)) return null
+        meta.put(name, o.optString("caption") + " · " + resolution)
+        return File(dir, name)
+    }
+
     /** Old pictures go: past [KEEP_DAYS] days (keeping the newest [MIN_FILES]) or past [MAX_FILES]; never the one on screen. */
     private fun prune() {
         val showing = runCatching { showFile.readText() }.getOrNull()
@@ -260,6 +293,10 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
 
     private fun write(bytes: ByteArray, name: String): Boolean {
         val bmp = fitScreen(bytes) ?: return false
+        return save(bmp, name)
+    }
+
+    private fun save(bmp: Bitmap, name: String): Boolean {
         val tmp = File(dir, "$name.part")
         tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
         bmp.recycle()
@@ -479,6 +516,7 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
             ART -> I18n.text(R.string.i18n_wallpapers_007)
             MINE -> I18n.text(R.string.i18n_wallpapers_008)
             CUSTOM -> I18n.text(R.string.i18n_wallpapers_009)
+            BING -> I18n.text(R.string.wallpaper_bing_daily)
             else -> I18n.text(R.string.i18n_wallpapers_010)
         }
 
