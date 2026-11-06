@@ -1,5 +1,9 @@
 # Tigris
 
+> **Redmi 定制 fork**：本仓库 fork 自 [lesnolie/Tigris](https://github.com/lesnolie/Tigris)，维护于 [SanStone3/Tigris](https://github.com/SanStone3/Tigris)，定制代码位于 [`redmi-custom` 分支](https://github.com/SanStone3/Tigris/tree/redmi-custom)。
+>
+> 定制范围与验证状态见 [Redmi 定制说明](docs/redmi-customization.md)。下文官网及正式版下载链接指向原项目。
+
 <p align="center">
   <a href="https://tigris-tv.pages.dev/">
     <img src="website/public/img/favicon.svg" alt="Tigris 官方网站图标" width="112" />

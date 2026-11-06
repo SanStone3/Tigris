@@ -1,5 +1,9 @@
 # Tigris
 
+> **Redmi customization fork:** This repository is forked from [lesnolie/Tigris](https://github.com/lesnolie/Tigris) and maintained at [SanStone3/Tigris](https://github.com/SanStone3/Tigris). Customizations are on the [`redmi-custom` branch](https://github.com/SanStone3/Tigris/tree/redmi-custom).
+>
+> See the [Redmi customization notes](docs/redmi-customization.md) for scope and validation status. The website and official release links below belong to the upstream project.
+
 <p align="center">
   <a href="https://tigris-tv.pages.dev/">
     <img src="website/public/img/favicon.svg" alt="Tigris website icon" width="112" />
