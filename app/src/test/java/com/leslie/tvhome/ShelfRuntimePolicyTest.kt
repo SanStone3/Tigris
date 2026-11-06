@@ -133,15 +133,52 @@ class ShelfRuntimePolicyTest {
         assertEquals(-1, ShelfRefreshPolicy.retainedIndex(reordered, null) { a, b -> a.id == b.id })
     }
 
-    @Test fun foregroundRefreshUsesRemainingCacheTimeAndRetriesAfterAnEmptyResult() {
+    @Test fun foregroundRefreshUsesRemainingCacheTimeAndCachesNormalEmptyResponses() {
         val at = 100_000L
         assertEquals(0L, ShelfRefreshPolicy.delayMs(null, at))
         assertEquals(600_000L, ShelfRefreshPolicy.delayMs(at, at + 300_000))
         assertEquals(0L, ShelfRefreshPolicy.delayMs(at, at + ShelfRefreshPolicy.TTL_MS))
-        // A failed or empty feed receives a cache timestamp too; resuming cannot hammer it.
+        // A successful empty response keeps the normal cadence.
         val attemptedAt = at + ShelfRefreshPolicy.TTL_MS
         assertEquals(ShelfRefreshPolicy.TTL_MS, ShelfRefreshPolicy.delayMs(attemptedAt, attemptedAt))
         assertEquals(ShelfRefreshPolicy.TTL_MS, ShelfRefreshPolicy.delayMs(attemptedAt, at))
+    }
+
+    @Test fun transportExceptionsKeepTheLastGoodFeedButUseATenSecondRetryDeadline() {
+        val at = 100_000L
+        val programmes = listOf(programme("current"))
+        val good = ShelfRefreshPolicy.afterFetch(null, programmes, at)
+        val failedAt = at + ShelfRefreshPolicy.TTL_MS
+        val failed = ShelfRefreshPolicy.afterFetch(good, null, failedAt)
+        assertSame(programmes, failed.items)
+        assertTrue(failed.failed)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, ShelfRefreshPolicy.feedDelayMs(failed, failedAt))
+        assertEquals(1L, ShelfRefreshPolicy.feedDelayMs(failed, failedAt + ShelfRefreshPolicy.RETRY_MS - 1))
+        assertEquals(0L, ShelfRefreshPolicy.feedDelayMs(failed, failedAt + ShelfRefreshPolicy.RETRY_MS))
+        val recovered = ShelfRefreshPolicy.afterFetch(failed, listOf(programme("new")), failedAt + ShelfRefreshPolicy.RETRY_MS)
+        assertFalse(recovered.failed)
+        assertEquals("new", recovered.items.single().id)
+        assertEquals(ShelfRefreshPolicy.TTL_MS, ShelfRefreshPolicy.feedDelayMs(recovered, recovered.at))
+    }
+
+    @Test fun anExceptionWithoutAPreviousFeedRetriesSoonButARealEmptyResponseRetainsTheNormalTtl() {
+        val failed = ShelfRefreshPolicy.afterFetch<Programme>(null, null, 100)
+        assertTrue(failed.items.isEmpty())
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, ShelfRefreshPolicy.feedDelayMs(failed, 100))
+        val empty = ShelfRefreshPolicy.afterFetch(failed, emptyList(), 200)
+        assertFalse(empty.failed)
+        assertEquals(ShelfRefreshPolicy.TTL_MS, ShelfRefreshPolicy.feedDelayMs(empty, 200))
+        val good = ShelfRefreshPolicy.afterFetch(null, listOf(programme("old")), 300)
+        assertTrue(ShelfRefreshPolicy.afterFetch(good, emptyList(), 400).items.isEmpty())
+    }
+
+    @Test fun failedArtworkWaitsTenSecondsEvenIfTheFeedExpiredDuringTheScan() {
+        val at = 100_000L
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, ShelfRefreshPolicy.nextDelayMs(ShelfRefreshPolicy.TTL_MS, at, at))
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, ShelfRefreshPolicy.nextDelayMs(5_000, at, at))
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, ShelfRefreshPolicy.nextDelayMs(0, at, at))
+        assertEquals(0L, ShelfRefreshPolicy.nextDelayMs(ShelfRefreshPolicy.TTL_MS, at, at + ShelfRefreshPolicy.RETRY_MS))
+        assertEquals(600_000L, ShelfRefreshPolicy.nextDelayMs(600_000, null, at))
     }
 
     @Test fun provenLowResolutionFailuresExpireAndDoNotPoisonOtherQualityPolicies() {

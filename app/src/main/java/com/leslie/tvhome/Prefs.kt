@@ -178,6 +178,11 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("guard", false)
         set(v) = sp.edit().putBoolean("guard", v).apply()
 
+    /** Explicit CONFIG opt-in: retain the verified KeyMapper MENU binding across Xiaomi standby. */
+    var preserveXiaomiMenu: Boolean
+        get() = sp.getBoolean("preserve_xiaomi_menu", false)
+        set(v) = sp.edit().putBoolean("preserve_xiaomi_menu", v).apply()
+
     /** Switch ADB debugging back on whenever the firmware turns it off (Xiaomi does on wake). */
     var keepAdb: Boolean
         get() = sp.getBoolean("keep_adb", false)

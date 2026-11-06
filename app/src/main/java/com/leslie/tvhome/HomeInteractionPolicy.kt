@@ -35,6 +35,10 @@ internal object HomeFocusMemory {
     fun remember(ids: List<String>, index: Int, scroll: Int): Anchor =
         ids.getOrNull(index)?.let { Anchor(it, index, scroll.coerceAtLeast(0)) } ?: Anchor()
 
+    /** A cold process restores only a surviving first-row Dock target, never an expanded grid row. */
+    fun restoreDock(anchor: Anchor, current: List<String>, columns: Int): Anchor? =
+        resolve(anchor, emptyList(), current, columns)?.let { remember(current, it, 0) }
+
     fun rebasedScroll(anchor: Anchor, index: Int, columns: Int, rowPitch: Int): Int =
         if (index < columns) 0 else (anchor.scroll + (index / columns - anchor.index / columns) * rowPitch).coerceAtLeast(0)
 

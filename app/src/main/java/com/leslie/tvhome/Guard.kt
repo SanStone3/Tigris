@@ -20,6 +20,17 @@ import android.util.Log
 import com.leslie.tvhome.tv.TclAdapter
 import com.leslie.tvhome.tv.XiaomiAdapter
 
+/** Explicit opt-in for the one verified physical MENU binding; unrelated services stay verbatim. */
+internal object XiaomiMenuPreservation {
+    const val PACKAGE = "io.github.sds100.keymapper"
+    const val SERVICE = "$PACKAGE/$PACKAGE.system.accessibility.MyAccessibilityService"
+    private const val SHORT_SERVICE = "$PACKAGE/.system.accessibility.MyAccessibilityService"
+
+    fun restore(entries: List<String>, guard: Boolean, xiaomi: Boolean, optIn: Boolean = false, installed: Boolean): List<String> =
+        if (!guard || !xiaomi || !optIn || !installed || entries.any { it == SERVICE || it == SHORT_SERVICE }) entries
+        else entries + SERVICE
+}
+
 /**
  * Keeping Tigris the home screen on firmwares that pin Home to their own launcher, without
  * disabling any system app. Ported from Aerial (github.com/pengchujin/aerial-tv, MIT), whose
@@ -135,6 +146,12 @@ object Guard {
         Settings.Secure.getString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES).orEmpty()
             .split(':').filter { it.isNotBlank() }
 
+    private fun menuServiceInstalled(ctx: Context): Boolean = runCatching {
+        val component = ComponentName.unflattenFromString(XiaomiMenuPreservation.SERVICE) ?: return false
+        val info = ctx.packageManager.getServiceInfo(component, 0)
+        info.enabled && info.applicationInfo.enabled
+    }.getOrDefault(false)
+
     /** Puts back whatever the firmware switched off: ADB, the photo-frame screensaver, the guard. */
     fun ensure(ctx: Context): Boolean {
         if (!isUserUnlocked(ctx)) return false
@@ -142,19 +159,28 @@ object Guard {
         SystemScreensaver.enforce(ctx)
         if (!hasSecureSettings(ctx)) return false
         keepScreensaver(ctx)
-        if (!Prefs(ctx).guard) return false
+        val prefs = Prefs(ctx)
+        if (!prefs.guard) return false
         RevivalSync.ensure(ctx)
         val me = service(ctx)
         val entries = enabledServices(ctx)
         return runCatching {
-            if (entries.none { ComponentName.unflattenFromString(it)?.flattenToString() == me }) {
+            val revived = entries.none { ComponentName.unflattenFromString(it)?.flattenToString() == me }
+            val guarded = if (revived) entries + me else entries
+            val xiaomi = isXiaomi()
+            val merged = XiaomiMenuPreservation.restore(guarded, guard = true, xiaomi = xiaomi,
+                optIn = prefs.preserveXiaomiMenu, installed = prefs.preserveXiaomiMenu && xiaomi && menuServiceInstalled(ctx))
+            if (merged != entries) {
+                // Append to the current list: firmware services and the user's other bindings remain.
+                Settings.Secure.putString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, merged.joinToString(":"))
+            }
+            if (revived) {
                 lastRevivedAt = SystemClock.elapsedRealtime()
-                // Appended, so the firmware's own services (小爱, TCL's 小T助手) stay on.
-                Settings.Secure.putString(ctx.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES, (entries + me).joinToString(":"))
                 Log.i(TAG, "home guard had been switched off; turned it back on")
             }
+            if (merged != guarded) Log.i(TAG, "restored the opted-in Xiaomi MENU binding service")
             Settings.Secure.putInt(ctx.contentResolver, Settings.Secure.ACCESSIBILITY_ENABLED, 1)
-            entries.none { ComponentName.unflattenFromString(it)?.flattenToString() == me }
+            revived
         }.onFailure { Log.w(TAG, "could not switch the home guard on", it) }.getOrDefault(false)
     }
 
@@ -283,6 +309,7 @@ class ConfigReceiver : BroadcastReceiver() {
         val prefs = Prefs(c)
         if (i.hasExtra("system_screensaver")) prefs.systemScreensaver = i.getBooleanExtra("system_screensaver", true)
         if (i.hasExtra("keep_adb")) prefs.keepAdb = i.getBooleanExtra("keep_adb", false)
+        if (i.hasExtra("preserve_xiaomi_menu")) prefs.preserveXiaomiMenu = i.getBooleanExtra("preserve_xiaomi_menu", false)
         if (i.hasExtra("guard")) Guard.setEnabled(c, i.getBooleanExtra("guard", false))
         if (i.hasExtra("home_filter")) {
             val on = i.getBooleanExtra("home_filter", false) &&
@@ -307,7 +334,7 @@ class ConfigReceiver : BroadcastReceiver() {
         if (i.hasExtra("intro_sound")) prefs.introSound = i.getBooleanExtra("intro_sound", true)
         if (i.hasExtra("wake_delay")) prefs.wakeDelay = i.getIntExtra("wake_delay", 5000)
         Guard.ensure(c)
-        resultData = "guard=${prefs.guard} keep_adb=${prefs.keepAdb} home_filter=${prefs.persistentHomeFilter} secure_settings=${Guard.hasSecureSettings(c)} " +
+        resultData = "guard=${prefs.guard} keep_adb=${prefs.keepAdb} preserve_xiaomi_menu=${prefs.preserveXiaomiMenu} home_filter=${prefs.persistentHomeFilter} secure_settings=${Guard.hasSecureSettings(c)} " +
             "background=${prefs.background} cc_style=${prefs.ccStyle} focus_style=${prefs.focusStyle} clock_style=${prefs.clockStyle} clock_24=${prefs.clock24} " +
             "intro=${prefs.intro} intro_source=${prefs.introSource} wake_delay=${prefs.wakeDelay} own_icon=${prefs.ownIcon} " +
             "settings_bg=${prefs.settingsBg} extreme_glass=${prefs.extremeGlass} system_screensaver=${prefs.systemScreensaver} low_end=${Device.isLowEnd(c)}"

@@ -53,7 +53,7 @@ object Shelf {
         "com.starcor.mango" to "mango",
     )
 
-    private data class Cached(val at: Long, val name: String, val items: List<Item>)
+    private data class Cached(val name: String, val feed: ShelfRefreshPolicy.Feed<Item>)
 
     private val sources get() = builtInPackages.mapValues { (_, kind) ->
         when (kind) {
@@ -82,6 +82,8 @@ object Shelf {
 
     private fun builtInKey(pkg: String) = builtInPackages[pkg]?.let { "builtin\u0000$it" }
     private fun customKey(pkg: String, custom: Custom) = "custom\u0000$pkg\u0000${custom.url.trim()}"
+    private fun previewSource(pkg: String, custom: Custom?) = ShelfFeedPreview.eligibleSource(
+        builtInPackages[pkg], pickShelf(pkg, custom, customOk = true) == ShelfPick.CUSTOM)
 
     /**
      * Custom wins only when the linked package matches and the body was usable.
@@ -110,14 +112,13 @@ object Shelf {
             var fetched = readCache(key, pkg)
             if (fetched == null) {
                 fetched = try {
-                    fetchCustom(url, isCurrent)
+                    fetchCustom(url, isCurrent).orEmpty()
                 } catch (e: Exception) {
                     if (isCurrent()) Log.w("Shelf", "custom $pkg failed", e)
                     null
                 }
                 if (!isCurrent()) return emptyList()
-                // Cache failed attempts too, so a wallpaper-only app retries at the same cadence.
-                writeCache(key, pkg, I18n.text(R.string.shelf_custom_source), fetched.orEmpty())
+                fetched = writeCache(key, pkg, I18n.text(R.string.shelf_custom_source), fetched)
             }
             if (!fetched.isNullOrEmpty()) {
                 return fetched
@@ -127,15 +128,39 @@ object Shelf {
         val src = sources[pkg] ?: return emptyList()
         val key = builtInKey(pkg) ?: return emptyList()
         readCache(key, pkg)?.let { return it }
+        val started = System.nanoTime()
+        Log.i("Shelf", "fetch_start pkg=$pkg ms=0")
         val list = try {
             src.fetch()
         } catch (e: Exception) {
-            Log.w("Shelf", "$pkg failed", e)
-            emptyList()
+            if (isCurrent()) Log.w("Shelf", "$pkg failed", e)
+            null
         }
         if (!isCurrent()) return emptyList()
-        writeCache(key, pkg, src.name, list)
-        return list
+        Log.i("Shelf", "fetch pkg=$pkg count=${list?.size ?: 0} ms=${(System.nanoTime() - started) / 1_000_000}")
+        return writeCache(key, pkg, src.name, list)
+    }
+
+    /** Background-only local metadata read. It supplies fallback items, never a fresh online TTL. */
+    fun previewItems(ctx: Context, pkg: String, custom: Custom?, isCurrent: () -> Boolean): List<Item> {
+        val source = previewSource(pkg, custom) ?: return emptyList()
+        val key = builtInKey(pkg) ?: return emptyList()
+        synchronized(cache) { cache[key]?.feed?.items?.takeIf { it.isNotEmpty() }?.let { return it } }
+        val now = System.currentTimeMillis()
+        val snapshot = ShelfFeedPreview.read(File(ctx.cacheDir, "shelf"), source, now, isCurrent) ?: return emptyList()
+        if (!isCurrent()) return emptyList()
+        synchronized(cache) {
+            if (cache[key] == null) cache[key] = Cached(sources.getValue(pkg).name, ShelfFeedPreview.staleFeed(snapshot, now))
+        }
+        return snapshot.items
+    }
+
+    /** Persist only a successfully fetched public feed whose artwork has been displayed/validated. */
+    fun rememberPreview(ctx: Context, pkg: String, custom: Custom?, items: List<Item>, isCurrent: () -> Boolean) {
+        val source = previewSource(pkg, custom) ?: return
+        val key = builtInKey(pkg) ?: return
+        val feed = synchronized(cache) { cache[key]?.feed?.takeIf { !it.failed && it.items == items } } ?: return
+        ShelfFeedPreview.write(File(ctx.cacheDir, "shelf"), source, ShelfFeedPreview.Snapshot(feed.at, items), isCurrent)
     }
 
     /** How long the current dock source can remain on screen before its cached feed expires. */
@@ -144,11 +169,11 @@ object Shelf {
         val deadlines = ArrayList<Long>(2)
         if (pickShelf(pkg, custom, customOk = true) == ShelfPick.CUSTOM) {
             val hit = cache[customKey(pkg, custom!!)]
-            val delay = ShelfRefreshPolicy.delayMs(hit?.at, now)
-            if (!hit?.items.isNullOrEmpty()) return@synchronized delay
+            val delay = ShelfRefreshPolicy.feedDelayMs(hit?.feed, now)
+            if (!hit?.feed?.items.isNullOrEmpty()) return@synchronized delay
             deadlines.add(delay)
         }
-        builtInKey(pkg)?.let { deadlines.add(ShelfRefreshPolicy.delayMs(cache[it]?.at, now)) }
+        builtInKey(pkg)?.let { deadlines.add(ShelfRefreshPolicy.feedDelayMs(cache[it]?.feed, now)) }
         deadlines.minOrNull() ?: ShelfRefreshPolicy.TTL_MS
     }
 
@@ -162,6 +187,21 @@ object Shelf {
     }
 
     fun image(ctx: Context, url: String): Bitmap? = image(ctx, url, false, false) { true }
+
+    /** Local preview must neither start a download nor wait for a download's per-URL lock. */
+    fun cachedImage(ctx: Context, item: Item, isCurrent: () -> Boolean): Bitmap? {
+        if (!item.requireFullHdArtwork) return null
+        for (url in ShelfLimits.artworkCandidates(item.image, item.fallbackImages)) {
+            if (!isCurrent()) return null
+            val file = File(File(ctx.cacheDir, "shelf"), Integer.toHexString(url.hashCode()) + ".jpg")
+            if (!file.isFile || file.length() > ShelfLimits.imageBytes(true)) continue
+            decodeArtwork(file, url, checkedArtwork = true, requireFullHd = true, isCurrent = isCurrent)?.let {
+                file.setLastModified(System.currentTimeMillis())
+                return it
+            }
+        }
+        return null
+    }
 
     private fun image(ctx: Context, url: String, requireHd: Boolean, requireFullHd: Boolean, isCurrent: () -> Boolean): Bitmap? =
         synchronized(artworkLocks[(url.hashCode() and Int.MAX_VALUE) % artworkLocks.size]) artwork@ {
@@ -194,7 +234,14 @@ object Shelf {
             if (isCurrent()) Log.w("Shelf", "image $url failed", e)
             return@artwork null
         }
-        if (!isCurrent()) return@artwork null
+        decodeArtwork(f, url, checkedArtwork, requireFullHd, isCurrent)
+    }
+
+    /** Disk previews and downloads share the exact native bounds, decoded size and crop checks. */
+    private fun decodeArtwork(f: File, url: String, checkedArtwork: Boolean, requireFullHd: Boolean,
+                              isCurrent: () -> Boolean): Bitmap? {
+        if (!isCurrent()) return null
+        val rejectionKey = "$requireFullHd:$checkedArtwork:$url"
         fun accepted(width: Int, height: Int) = when {
             requireFullHd -> ShelfLimits.isFullHdLandscape(width, height)
             checkedArtwork -> ShelfLimits.isHdLandscape(width, height)
@@ -205,7 +252,7 @@ object Shelf {
             f.delete()
         }
         var bitmap: Bitmap? = null
-        runCatching {
+        return runCatching {
             // Validate the downloaded file's native bounds before sampling or scaling it.
             val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
             BitmapFactory.decodeFile(f.path, bounds)
@@ -248,16 +295,19 @@ object Shelf {
 
     private fun readCache(key: String, pkg: String): List<Item>? = synchronized(cache) {
         val hit = cache[key] ?: return null
-        if (ShelfRefreshPolicy.delayMs(hit.at, System.currentTimeMillis()) == 0L) return null
-        if (hit.items.isNotEmpty()) shownName[pkg] = hit.name
-        hit.items
+        if (ShelfRefreshPolicy.feedDelayMs(hit.feed, System.currentTimeMillis()) == 0L) return null
+        if (hit.feed.items.isNotEmpty()) shownName[pkg] = hit.name
+        hit.feed.items
     }
 
-    private fun writeCache(key: String, pkg: String, name: String, items: List<Item>) {
-        synchronized(cache) {
-            cache[key] = Cached(System.currentTimeMillis(), name, items)
-            shownName[pkg] = name
-        }
+    private fun writeCache(key: String, pkg: String, name: String, items: List<Item>?): List<Item> = synchronized(cache) {
+        val previous = cache[key]
+        val feed = ShelfRefreshPolicy.afterFetch(previous?.feed, items, System.currentTimeMillis())
+        val source = if (items == null) previous?.name ?: name else name
+        cache[key] = Cached(source, feed)
+        shownName[pkg] = source
+        if (items != null) Log.i("Shelf", "feed pkg=$pkg count=${items.size}")
+        feed.items
     }
 
     private fun decodeCapped(path: String, isCurrent: () -> Boolean): Bitmap? {

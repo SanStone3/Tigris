@@ -7,6 +7,23 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class HomeInteractionPolicyTest {
+    @Test fun coldDockRestorationUsesIdentityAfterReorderingAndSafelyFallsBackAfterRemoval() {
+        val anchor = HomeFocusMemory.Anchor("youku", 4, 900)
+        val reordered = listOf("mango", "bili", "youku", "drive", "box")
+        assertEquals(HomeFocusMemory.Anchor("youku", 2, 0), HomeFocusMemory.restoreDock(anchor, reordered, 5))
+        val removed = listOf("mango", "bili", "drive", "box")
+        assertEquals(HomeFocusMemory.Anchor("box", 3, 0), HomeFocusMemory.restoreDock(anchor, removed, 5))
+    }
+
+    @Test fun coldDockRestorationNeverExpandsTheGridOrChangesTheSavedDockOrder() {
+        val apps = listOf("mango", "bili", "box", "drive", "youku", "other")
+        val before = apps.toList()
+        assertEquals(HomeFocusMemory.Anchor("box", 2, 0),
+            HomeFocusMemory.restoreDock(HomeFocusMemory.Anchor("youku", 4, 900), apps, 3))
+        assertEquals(before, apps)
+        assertNull(HomeFocusMemory.restoreDock(HomeFocusMemory.Anchor("youku", 4), emptyList(), 5))
+    }
+
     @Test fun backUnwindsOneLayerAndNeverOpensControlAtTheDock() {
         var state = HomeNavigationPolicy.State(overlay = true, moving = true, control = true, expanded = true, header = false)
         fun back() = HomeNavigationPolicy.action(HomeNavigationPolicy.Key.BACK, state)

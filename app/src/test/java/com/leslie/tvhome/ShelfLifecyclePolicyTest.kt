@@ -22,7 +22,8 @@ class ShelfLifecyclePolicyTest {
         var bitmap: Any? = Any()
         var shown = true
         var fetches = 0
-        var cacheAt: Long? = null
+        var cache: ShelfRefreshPolicy.Feed<String>? = null
+        var artworkFailedAt: Long? = null
         var now = 100L
         var refreshDelay: Long? = null
         var advanceScheduled = false
@@ -59,7 +60,7 @@ class ShelfLifecyclePolicyTest {
 
         private fun stop() {
             requests.cancel(); session.invalidate()
-            refreshDelay = null; advanceScheduled = false
+            refreshDelay = null; advanceScheduled = false; artworkFailedAt = null
         }
 
         private fun fetch() {
@@ -74,7 +75,7 @@ class ShelfLifecyclePolicyTest {
         private fun schedule() {
             val ticket = session.current ?: return
             if (requests.isLoading(ticket)) { refreshDelay = null; advanceScheduled = false; return }
-            refreshDelay = ShelfRefreshPolicy.delayMs(cacheAt, now)
+            refreshDelay = ShelfRefreshPolicy.nextDelayMs(ShelfRefreshPolicy.feedDelayMs(cache, now), artworkFailedAt, now)
             advanceScheduled = rotation && items.size > 1
         }
 
@@ -82,14 +83,38 @@ class ShelfLifecyclePolicyTest {
             if (refreshDelay == 0L && focusAction() == ShelfFocusPolicy.Action.ACTIVE) fetch()
         }
 
-        fun complete(ticket: ShelfSession.Ticket, feed: List<String>) {
+        fun advanceTime(ms: Long) {
+            now += ms
+            refreshDelay = refreshDelay?.let { (it - ms).coerceAtLeast(0) }
+            runDueRefresh()
+        }
+
+        fun switchAway() { dockTarget = false; reconcile() }
+
+        fun preview(ticket: ShelfSession.Ticket, feed: List<String>): Boolean {
+            if (!session.accepts(ticket) || !requests.isLoading(ticket) || focusAction() != ShelfFocusPolicy.Action.ACTIVE) return false
+            if (feed.isEmpty()) return false
+            if (cache == null) cache = ShelfRefreshPolicy.afterFetch(null, feed, now - ShelfRefreshPolicy.TTL_MS)
+            items = feed; index = 0; bitmap = Any(); shown = true
+            capturedCurrent[ticket] = feed.first()
+            return true
+        }
+
+        fun complete(ticket: ShelfSession.Ticket, feed: List<String>?, pictureAvailable: Boolean = true, fromCache: Boolean = false) {
             val previous = capturedCurrent.remove(ticket)
             if (!requests.finish(ticket) || !session.accepts(ticket)) return
-            val retained = ShelfRefreshPolicy.retainedIndex(feed, previous) { a, b -> a == b }
-            items = feed
+            if (!fromCache) cache = ShelfRefreshPolicy.afterFetch(cache, feed, now)
+            val fetched = cache!!.items
+            val retained = ShelfRefreshPolicy.retainedIndex(fetched, previous) { a, b -> a == b }
+            val first = if (retained >= 0) null else ShelfCandidateScan.first(fetched) {
+                if (pictureAvailable) Any() else null
+            }
+            val artworkFailed = retained < 0 && first == null && (fetched.isNotEmpty() || shown)
+            artworkFailedAt = if (artworkFailed) now else null
+            if (!artworkFailed) items = fetched
             if (retained >= 0) index = retained
-            else { index = 0; bitmap = feed.firstOrNull()?.let { Any() }; shown = bitmap != null }
-            cacheAt = now
+            else if (first != null) { index = first.index; bitmap = first.value; shown = true }
+            else if (!artworkFailed) { index = 0; bitmap = null; shown = false }
             schedule()
         }
     }
@@ -229,5 +254,175 @@ class ShelfLifecyclePolicyTest {
         assertTrue(home.items.isEmpty())
         assertNull(home.bitmap)
         assertNull(home.session.current)
+    }
+
+    @Test fun aColdWakeFeedFailureRetriesAfterTenSecondsAndReturnsToTheNormalCadenceOnSuccess() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        home.complete(home.session.current!!, null) // Network is still returning from standby.
+        assertFalse(home.shown)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+        repeat(20) { home.windowFocus(true); home.runDueRefresh() }
+        assertEquals(1, home.fetches)
+        home.advanceTime(ShelfRefreshPolicy.RETRY_MS - 1)
+        assertEquals(1, home.fetches)
+        home.advanceTime(1)
+        assertEquals(2, home.fetches)
+        assertNull(home.refreshDelay)
+        home.complete(home.session.current!!, listOf("recovered"))
+        assertTrue(home.shown)
+        assertEquals("recovered", home.items[home.index])
+        assertEquals(ShelfRefreshPolicy.TTL_MS, home.refreshDelay)
+    }
+
+    @Test fun aSuccessfulFeedWithTemporarilyUnavailablePicturesAlsoRetriesWithoutWaitingFifteenMinutes() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        home.complete(home.session.current!!, listOf("programme"), pictureAvailable = false)
+        assertFalse(home.shown)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+        home.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+        assertEquals(2, home.fetches)
+        home.complete(home.session.current!!, home.cache!!.items, fromCache = true)
+        assertTrue(home.shown)
+        assertEquals("programme", home.items[home.index])
+        assertNull(home.artworkFailedAt)
+        assertEquals(ShelfRefreshPolicy.TTL_MS - ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+    }
+
+    @Test fun aFeedExceptionPreservesTheSuccessfulFeedAndDisplayedBitmapWhileRetrying() {
+        val home = HomeShelf()
+        val bitmap = home.bitmap
+        val feed = home.items
+        home.resume(windowFocused = true)
+        home.complete(home.session.current!!, feed)
+        home.advanceTime(ShelfRefreshPolicy.TTL_MS)
+        home.complete(home.session.current!!, null)
+        assertSame(feed, home.cache!!.items)
+        assertSame(bitmap, home.bitmap)
+        assertTrue(home.shown)
+        assertEquals("selected", home.items[home.index])
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+    }
+
+    @Test fun pictureFailuresInAChangedFeedKeepThePreviousSuccessfulPictureUntilRecovery() {
+        val home = HomeShelf()
+        val bitmap = home.bitmap
+        val previous = home.items
+        home.resume(windowFocused = true)
+        home.complete(home.session.current!!, listOf("new"), pictureAvailable = false)
+        assertSame(previous, home.items)
+        assertSame(bitmap, home.bitmap)
+        assertTrue(home.shown)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+        home.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+        home.complete(home.session.current!!, listOf("new"), fromCache = true)
+        assertEquals(listOf("new"), home.items)
+        assertNotSame(bitmap, home.bitmap)
+        assertEquals(ShelfRefreshPolicy.TTL_MS - ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+    }
+
+    @Test fun pauseFocusLossAndOverlaysCancelThePendingRetryAndRejectItsOldCompletion() {
+        val stops: List<(HomeShelf) -> Unit> = listOf({ it.pause() }, { it.windowFocus(false) }, { it.openControl() })
+        stops.forEach { stop ->
+            val waiting = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+            waiting.resume(windowFocused = true)
+            waiting.complete(waiting.session.current!!, null)
+            stop(waiting)
+            waiting.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+            assertEquals(1, waiting.fetches)
+            assertNull(waiting.refreshDelay)
+
+            val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+            home.resume(windowFocused = true)
+            home.complete(home.session.current!!, listOf("programme"), pictureAvailable = false)
+            home.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+            val old = home.session.current!!
+            stop(home)
+            assertNull(home.refreshDelay)
+            assertNull(home.artworkFailedAt)
+            assertNull(home.session.current)
+            home.complete(old, listOf("obsolete"))
+            home.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+            assertFalse(home.shown)
+            assertEquals(2, home.fetches)
+            assertNull(home.refreshDelay)
+        }
+    }
+
+    @Test fun changingDockTargetsCancelsTheRetryAndAnOldFailureCannotUnlockTheNewRequest() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        home.complete(home.session.current!!, null)
+        home.advanceTime(ShelfRefreshPolicy.RETRY_MS)
+        val old = home.session.current!!
+        home.switchAway()
+        assertNull(home.refreshDelay)
+        home.dockTarget = true
+        home.windowFocus(true)
+        val latest = home.session.current!!
+        home.complete(old, null)
+        assertTrue(home.requests.isLoading(latest))
+        assertNull(home.refreshDelay)
+        home.complete(latest, listOf("current"))
+        assertTrue(home.shown)
+        assertEquals(listOf("current"), home.items)
+        assertEquals(ShelfRefreshPolicy.TTL_MS, home.refreshDelay)
+    }
+
+    @Test fun localPreviewIsVisibleWhileTheOnlineRequestIsStillPendingAndSurvivesItsFailure() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        val ticket = home.session.current!!
+        assertTrue(home.preview(ticket, listOf("cached")))
+        val previewBitmap = home.bitmap
+        assertTrue(home.shown)
+        assertTrue(home.requests.isLoading(ticket))
+        assertNull(home.refreshDelay)
+        home.complete(ticket, null)
+        assertTrue(home.shown)
+        assertSame(previewBitmap, home.bitmap)
+        assertEquals(listOf("cached"), home.items)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+    }
+
+    @Test fun successfulBackgroundRefreshReplacesThePreviewAndReturnsToTheOnlineTtl() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        val ticket = home.session.current!!
+        home.preview(ticket, listOf("cached"))
+        val previous = home.bitmap
+        home.complete(ticket, listOf("online"))
+        assertEquals(listOf("online"), home.items)
+        assertNotSame(previous, home.bitmap)
+        assertEquals(ShelfRefreshPolicy.TTL_MS, home.refreshDelay)
+    }
+
+    @Test fun anEmptyBackgroundResponseDoesNotBlankTheAlreadyDisplayedPreview() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        val ticket = home.session.current!!
+        home.preview(ticket, listOf("cached"))
+        val previous = home.bitmap
+        home.complete(ticket, emptyList())
+        assertSame(previous, home.bitmap)
+        assertTrue(home.shown)
+        assertEquals(listOf("cached"), home.items)
+        assertEquals(ShelfRefreshPolicy.RETRY_MS, home.refreshDelay)
+    }
+
+    @Test fun aPreviewAndOnlineCompletionFromBeforePauseCannotPublishIntoTheNewSession() {
+        val home = HomeShelf().apply { items = emptyList(); bitmap = null; shown = false }
+        home.resume(windowFocused = true)
+        val old = home.session.current!!
+        home.pause()
+        home.resume(windowFocused = true)
+        val current = home.session.current!!
+        assertFalse(home.preview(old, listOf("obsolete")))
+        home.complete(old, listOf("obsolete"))
+        assertFalse(home.shown)
+        assertTrue(home.requests.isLoading(current))
+        assertTrue(home.preview(current, listOf("current")))
+        assertEquals(listOf("current"), home.items)
     }
 }
