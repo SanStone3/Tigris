@@ -1,0 +1,43 @@
+{
+  "code": 200,
+  "data": [
+    {
+      "moduleType": "banner",
+      "moduleName": "banner",
+      "adId": 0,
+      "moduleData": [
+        {
+          "jumpKind": "1",
+          "videoId": "7236614",
+          "jumpId": "817372",
+          "subName": "质感夯爆🤩杨超越董思成纯正初恋味",
+          "imgHUrl": "https://2vimg.hitv.com/100/2611/0609/3842/h1nAOodw3hVO/620191275929235456.jpg",
+          "name": "今天是太阳雨☀爽看3集",
+          "imgHVUrl": "",
+          "cid": "2"
+        },
+        {
+          "jumpKind": "1",
+          "videoId": "7236615",
+          "jumpId": "802659",
+          "subName": "被虐哭了！叶平君带儿子等待虞昶轩回家",
+          "imgHUrl": "https://1vimg.hitv.com/100/2611/0610/1616/h1nAOodw3hVO/620200729714290688.jpg",
+          "name": "玉簟秋🍁大结局",
+          "imgHVUrl": "",
+          "cid": "2"
+        },
+        {
+          "jumpKind": "12",
+          "videoId": "7236616",
+          "jumpId": "896990",
+          "childId": "24773627",
+          "subName": "李小冉孙怡唐艺昕面试合唱团 ",
+          "imgHUrl": "https://1vimg.hitv.com/100/2611/0610/3153/2OmIVLm8O7/620204658617876480.jpg",
+          "name": "不想睡的星期五·第11期",
+          "imgHVUrl": "",
+          "cid": "1"
+        }
+      ]
+    }
+  ]
+}

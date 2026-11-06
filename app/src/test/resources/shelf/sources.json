@@ -4,7 +4,40 @@
   "youku": {
     "page": "https://pd.youku.com/CIBN?screen=phone",
     "apk": "https://gtvappstore.alicdn.com/tvapp3/apks/20250603/20250603-ccb2a058-f819-4ee3-a3b2-45910b1fd637.apk",
-    "manifestPackage": "com.cibn.tv"
+    "manifestPackage": "com.cibn.tv",
+    "imageAudit": {
+      "selection": "Retain editorial hImg. The img field is portrait artwork.",
+      "imageProbes": [
+        {
+          "title": "八仙！",
+          "url": "http://liangcang-material.alicdn.com/prod/upload/474f5df784404bd99211a5fe3dfcb14e.webp.jpg",
+          "httpStatus": 200,
+          "mime": "image/jpeg",
+          "bytes": 479115,
+          "width": 1920,
+          "height": 1080
+        },
+        {
+          "title": "谷雨",
+          "url": "http://liangcang-material.alicdn.com/prod/upload/5f544c80b0f044608bd5355e1f938ca0.webp.jpg",
+          "httpStatus": 200,
+          "mime": "image/jpeg",
+          "bytes": 748674,
+          "width": 1920,
+          "height": 1080
+        },
+        {
+          "title": "嫁金钗",
+          "url": "http://liangcang-material.alicdn.com/prod/upload/93ae9161dcd345cdaf38a268bebce2c6.webp.jpg",
+          "httpStatus": 200,
+          "mime": "image/jpeg",
+          "bytes": 522310,
+          "width": 1920,
+          "height": 1080
+        }
+      ],
+      "higherResolution": "Not established in this audit; 1920x1080 is the measured sample size, not a claimed platform maximum."
+    }
   },
   "iqiyi": {
     "page": "https://www.iqiyi.com/appstore.html",
@@ -57,7 +90,47 @@
   "tencent": {
     "page": "https://tv.qq.com/",
     "apk": "https://dldir1.qq.com/qqmi/kt/snm/video/tv_video_4.7.0.1023_android_16118.apk",
-    "manifestPackage": "com.ktcp.video"
+    "manifestPackage": "com.ktcp.video",
+    "sourceType": "Anonymous public website editorial carousel, not a TV-specific or personalized list.",
+    "imageSelection": {
+      "primary": "pic_1920x800",
+      "fallback": "pic_1280x720",
+      "minimumActualDimensions": "Landscape at least 1280x720 after decoding and trimming; otherwise wallpaper.",
+      "excluded": "pic_ori_2x1 and pic_pc_ip_logo are transparent title logos; pic_ori_2880x900 resolves to the same 1920x800 artwork in all three samples."
+    },
+    "imageProbes": [
+      {
+        "title": "诛仙 最终季",
+        "programmeId": "mzc00200w9z1axf",
+        "url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-1_1483375573_1793928494599347_pic_1920x800/0",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 683299,
+        "width": 1920,
+        "height": 800
+      },
+      {
+        "title": "八仙！",
+        "programmeId": "mzc00200iivbt9k",
+        "url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_1068503345_1793928557799025_pic_1920x800/0",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 485621,
+        "width": 1920,
+        "height": 800
+      },
+      {
+        "title": "走马上任",
+        "programmeId": "mzc00200zsqz54y",
+        "url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_913249289_1793942639686070_pic_1920x800/0",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 136206,
+        "width": 1920,
+        "height": 800
+      }
+    ],
+    "aspectRatio": "1920x800 is cinematic wide artwork; fitting a 16:9 viewport crops the sides while preserving proportions. It is not claimed to be 1080p or 4K."
   },
   "mango": {
     "packageEvidence": "https://tc.coocaa.ottcn.com/appstore/appstorev3/thirdAppVersion?pkgs=%5Bcom.hunantv.market%5D",
@@ -65,9 +138,42 @@
       "appName": "芒果TV",
       "appPackage": "com.hunantv.market"
     },
-    "webBundle": "https://static.hitv.com/pc/25.0986699.js",
-    "channelConfig": "https://pianku.api.mgtv.com/rider/config/channel/v1?channelId=2&platform=pcweb",
-    "sort": "c2 = 最热"
+    "source": "https://mob-st.bz.mgtv.com/odin/c1/channel/index?vclassId=60&type=10&pageNo=1&pageSize=10",
+    "sourceType": "Anonymous public mobile homepage featured banners, not a TV-specific or personalized list; labelled Mango public featured.",
+    "selection": "Non-ad banner modules, programme jumpKind 1/12 and numeric jumpId; use the directly returned official imgHUrl without resizing parameters.",
+    "imageProbes": [
+      {
+        "title": "今天是太阳雨☀爽看3集",
+        "programmeId": "817372",
+        "url": "https://2vimg.hitv.com/100/2611/0609/3842/h1nAOodw3hVO/620191275929235456.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 409055,
+        "width": 1500,
+        "height": 844
+      },
+      {
+        "title": "玉簟秋🍁大结局",
+        "programmeId": "802659",
+        "url": "https://1vimg.hitv.com/100/2611/0610/1616/h1nAOodw3hVO/620200729714290688.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 234508,
+        "width": 1500,
+        "height": 844
+      },
+      {
+        "title": "不想睡的星期五·第11期",
+        "programmeId": "896990",
+        "url": "https://1vimg.hitv.com/100/2611/0610/3153/2OmIVLm8O7/620204658617876480.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 503455,
+        "width": 1500,
+        "height": 844
+      }
+    ],
+    "qualityBoundary": "Former popular-list images remained 750x420 even with the official resize syntax. New verified originals are 1500x844, not 1080p or 4K."
   },
   "quarkTv": {
     "officialPage": "https://pan.quark.cn/?page_info=1",
@@ -80,5 +186,77 @@
     "recentPlaybackEnabled": false,
     "staticFindings": "Exported MediaBrowser service returns no browser children for the ordinary caller strategy; the exported provider exposes internal running/network information, not a verified history list.",
     "nextCheck": "On the actual TV, observe existing active media sessions during normal owner playback for optional title/artwork/sessionActivity. This does not query full cloud history. No TV was connected in the local investigation."
+  },
+  "bilibili": {
+    "api": "https://api.bilibili.com/x/web-interface/popular?ps=12&pn=1",
+    "packages": [
+      "com.xiaodianshi.tv.yst",
+      "com.tutu.myblbl"
+    ],
+    "imageSelection": "Use the returned original pic without adding a 1280-pixel rendition. Actual uploader source sizes vary; no upscaling or 4K guarantee.",
+    "imageProbes": [
+      {
+        "title": "【2026全球总决赛】11月6日 DK vs BLG",
+        "url": "https://i1.hdslb.com/bfs/archive/7f17e804982c34e9b9fd788b1d160361c7f34cb0.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 39291,
+        "width": 1000,
+        "height": 625
+      },
+      {
+        "title": "楚钧：都不许软脚！",
+        "url": "https://i0.hdslb.com/bfs/archive/53a00e80b67f928c088fec999560b83ee33af62e.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 172141,
+        "width": 1920,
+        "height": 1080
+      },
+      {
+        "title": "当你在过山车上紧急视频会议",
+        "url": "https://i0.hdslb.com/bfs/archive/efaaffd2c8ae8317026d15cdcc56042e6dead736.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 72646,
+        "width": 1920,
+        "height": 1080
+      }
+    ]
+  },
+  "douyu": {
+    "api": "https://www.douyu.com/japi/weblist/apinc/allpage/6/1",
+    "package": "com.douyu.xl.douyutv",
+    "imageSelection": "Retain the official dy4 rendition instead of the 320x180 dy1 thumbnail. Room-page live snapshots may show different content and are not silently substituted.",
+    "imageProbes": [
+      {
+        "title": "小众宝藏结晶直播间 6657",
+        "url": "https://rpic.douyucdn.cn/live-cover/coverupdate/2026/11/02/4f09a145f0eb04f2231f0503399c9549.png/dy4",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 103806,
+        "width": 899,
+        "height": 500
+      },
+      {
+        "title": "陪伴每一天！",
+        "url": "https://rpic.douyucdn.cn/asrpic/261106/9999_src_1649.avif/dy4",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 94634,
+        "width": 1280,
+        "height": 720
+      },
+      {
+        "title": "Running IVE联名已登录PUBG",
+        "url": "https://rpic.douyucdn.cn/asrpic/261106/2448877_src_1649.avif/dy4",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "bytes": 60189,
+        "width": 1280,
+        "height": 720
+      }
+    ],
+    "higherResolution": "Not established; observed current covers vary, including a smaller custom cover."
   }
 }

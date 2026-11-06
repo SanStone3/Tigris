@@ -21,7 +21,10 @@ import java.net.URL
  * leaves the built-in feed for that package in place when one exists.
  */
 object Shelf {
-    data class Item(val title: String, val meta: String, val image: String)
+    data class Item(
+        val title: String, val meta: String, val image: String,
+        val fallbackImages: List<String> = emptyList(), val requireHdArtwork: Boolean = false,
+    )
     data class Source(val name: String, val fetch: () -> List<Item>)
 
     /** One user-entered feed, shown when [pkg] is focused in the dock. */
@@ -121,11 +124,20 @@ object Shelf {
     }
 
     /** Downloads (or reads from the disk cache) an item's picture. */
-    fun image(ctx: Context, url: String): Bitmap? {
+    fun image(ctx: Context, item: Item): Bitmap? {
+        for (url in ShelfLimits.artworkCandidates(item.image, item.fallbackImages)) {
+            image(ctx, url, item.requireHdArtwork)?.let { return it }
+        }
+        return null
+    }
+
+    fun image(ctx: Context, url: String): Bitmap? = image(ctx, url, false)
+
+    private fun image(ctx: Context, url: String, requireHd: Boolean): Bitmap? {
         if (!ShelfLimits.isHttpUrl(url)) return null
         val dir = File(ctx.cacheDir, "shelf").apply { mkdirs() }
         val f = File(dir, Integer.toHexString(url.hashCode()) + ".jpg")
-        val checkedArtwork = IqiyiArtworkPolicy.isLandscapeCandidate(url)
+        val checkedArtwork = requireHd || IqiyiArtworkPolicy.isLandscapeCandidate(url)
         val tmp = File(dir, f.name + ".part")
         if (!f.exists()) try {
             tmp.writeBytes(get(url, ShelfLimits.MAX_IMAGE_BYTES))
@@ -141,7 +153,7 @@ object Shelf {
         return runCatching {
             val decoded = decodeCapped(f.path)
             bitmap = decoded
-            if (decoded == null || checkedArtwork && !IqiyiArtworkPolicy.acceptsDimensions(decoded.width, decoded.height)) {
+            if (decoded == null || checkedArtwork && !ShelfLimits.isHdLandscape(decoded.width, decoded.height)) {
                 if (checkedArtwork) { tmp.delete(); f.delete() }
                 decoded?.recycle()
                 bitmap = null
@@ -150,7 +162,7 @@ object Shelf {
             val trimmed = trimBars(decoded)
             if (trimmed !== decoded) decoded.recycle()
             bitmap = trimmed
-            if (checkedArtwork && !IqiyiArtworkPolicy.acceptsDimensions(trimmed.width, trimmed.height)) {
+            if (checkedArtwork && !ShelfLimits.isHdLandscape(trimmed.width, trimmed.height)) {
                 tmp.delete(); f.delete(); trimmed.recycle(); bitmap = null
                 return@runCatching null
             }
@@ -194,8 +206,13 @@ object Shelf {
         val opts = BitmapFactory.Options().apply {
             inSampleSize = ShelfLimits.sampleSize(bounds.outWidth, bounds.outHeight)
             inPreferredConfig = Bitmap.Config.ARGB_8888
+            inMutable = true
         }
-        return BitmapFactory.decodeFile(path, opts)
+        val decoded = BitmapFactory.decodeFile(path, opts) ?: return null
+        val (width, height) = ShelfLimits.fittedSize(decoded.width, decoded.height)
+        if (width == decoded.width && height == decoded.height) return decoded
+        return try { Bitmap.createScaledBitmap(decoded, width, height, true) }
+        finally { decoded.recycle() }
     }
 
     /**
@@ -234,7 +251,7 @@ object Shelf {
             Item(
                 v.optString("title"),
                 I18n.text(R.string.i18n_shelf_003, v.getJSONObject("owner").optString("name"), count(v.getJSONObject("stat").optLong("view"))),
-                v.optString("pic").replace("http://", "https://") + "@1280w_720h_1c.jpg",
+                v.optString("pic").replace("http://", "https://"),
             )
         }
     }

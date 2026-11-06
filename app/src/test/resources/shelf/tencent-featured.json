@@ -11,14 +11,22 @@
                 "params": {
                   "title": "八仙！",
                   "image_url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-1_1008539256_1793928551310969_pic_1080x607/0",
-                  "cid": "mzc00200iivbt9k"
+                  "cid": "mzc00200iivbt9k",
+                  "pic_1280x720": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-1_1008539256_1793928551310969_pic_1280x720/0",
+                  "pic_1920x800": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_1068503345_1793928557799025_pic_1920x800/0",
+                  "pic_ori_2x1": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_793000750_1793928566021272/0",
+                  "ready_image_url": "https://vcover-hz-pic.puui.qpic.cn/vcover_hz_pic/0/mzc00200iivbt9k1793874412508/0"
                 }
               },
               {
                 "params": {
                   "title": "走马上任",
                   "image_url": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_766435538_1793942617810318_pic_1080x607/0",
-                  "cid": "mzc00200zsqz54y"
+                  "cid": "mzc00200zsqz54y",
+                  "pic_1280x720": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_766435538_1793942617810318_pic_1280x720/0",
+                  "pic_1920x800": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_913249289_1793942639686070_pic_1920x800/0",
+                  "pic_ori_2x1": "https://tv.puui.qpic.cn/tv/0/mz_tv_image_frontend_1f6d55-2_2042023566_1793592208865754/0",
+                  "ready_image_url": "https://vcover-hz-pic.puui.qpic.cn/vcover_hz_pic/0/mzc00200zsqz54y1788778827069/0"
                 }
               }
             ]

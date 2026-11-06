@@ -17,7 +17,7 @@ internal object IqiyiArtworkPolicy {
 
     fun isLandscapeCandidate(raw: String): Boolean = parse(raw)?.let { it.width == 1920 && it.height == 1080 } == true
 
-    fun acceptsDimensions(width: Int, height: Int) = width >= 1280 && height >= 720 && width > height
+    fun acceptsDimensions(width: Int, height: Int) = ShelfLimits.isHdLandscape(width, height)
 
     private fun parse(raw: String): Cover? {
         val text = raw.trim().let { if (it.startsWith("//")) "https:$it" else it }

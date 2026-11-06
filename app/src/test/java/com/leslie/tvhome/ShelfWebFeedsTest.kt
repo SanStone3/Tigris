@@ -14,17 +14,19 @@ class ShelfWebFeedsTest {
         // Captured anonymously on 2026-11-06; provenance and verified TV packages
         // are retained in shelf/sources.json. No external network in these tests.
         val youku = ShelfWebFeeds.youku(fixture("youku-home.html"))
-        val mango = ShelfWebFeeds.mango(fixture("mango-popular.json"))
+        val mango = ShelfWebFeeds.mango(fixture("mango-featured.json"))
         val tencent = ShelfWebFeeds.tencent(fixture("tencent-featured.json"))
         assertEquals(listOf("八仙！", "谷雨", "嫁金钗"), youku.map { it.title })
-        assertEquals(listOf("玉簟秋", "小巷人家"), mango.map { it.title })
+        assertEquals(listOf("今天是太阳雨☀爽看3集", "玉簟秋🍁大结局", "不想睡的星期五·第11期"), mango.map { it.title })
         assertEquals(listOf("八仙！", "走马上任"), tencent.map { it.title })
+        assertTrue(tencent.all { "pic_1920x800" in it.image && it.requireHdArtwork })
+        assertTrue(tencent.all { it.fallbackImages.size == 1 && "pic_1280x720" in it.fallbackImages.single() })
         (youku + mango + tencent).forEach {
             assertTrue(it.image.startsWith("https://"))
             assertTrue(ShelfLimits.isHttpUrl(it.image))
             assertTrue(it.title.isNotBlank())
         }
-        assertTrue(mango.first().image.contains("202510311138040157719"))
+        assertTrue(mango.all { it.requireHdArtwork && it.image.contains("vimg.hitv.com/") })
     }
 
     @Test fun brokenOrChangedSourcesProduceNoShelf() {
@@ -59,7 +61,7 @@ class ShelfWebFeedsTest {
             {"ret":0,"data":{"CardList":[{"type":"pc_carousel","children_list":{
               "ad_list":{"cards":[{"params":{"cid":"x","title":"Sibling ad","image_url":"https://media.example/a.jpg"}}]},
               "list":{"cards":[
-                {"params":{"cid":"film","title":"Film","image_url":"//media.example/film.jpg"}},
+                {"params":{"cid":"film","title":"Film","pic_1920x800":"//media.example/film.jpg"}},
                 {"params":{"cid":"ad","title":"Ad","ad_type":"plain","image_url":"https://media.example/a.jpg"}},
                 {"params":{"title":"No programme","image_url":"https://media.example/b.jpg"}}
               ]}
@@ -68,15 +70,34 @@ class ShelfWebFeedsTest {
         assertEquals(listOf("Film"), ShelfWebFeeds.tencent(body).map { it.title })
     }
 
+    @Test fun tencentUsesOnlyReturnedProgrammeArtworkAndKeepsOneHdFallback() {
+        fun body(params: String) = """{"ret":0,"data":{"CardList":[{"type":"pc_carousel","children_list":{"list":{"cards":[{"params":$params}]}}}]}}"""
+        val item = ShelfWebFeeds.tencent(body("""{"cid":"film","title":"Film",
+            "pic_1920x800":"//media.example/wide.jpg","pic_1280x720":"https://media.example/hd.jpg",
+            "pic_ori_2x1":"https://media.example/transparent-logo.png",
+            "ready_image_url":"https://media.example/unknown-size.jpg","image_url":"https://media.example/small.jpg"}""")).single()
+        assertEquals("https://media.example/wide.jpg", item.image)
+        assertEquals(listOf("https://media.example/hd.jpg"), item.fallbackImages)
+        assertTrue(item.requireHdArtwork)
+        val fallbackOnly = ShelfWebFeeds.tencent(body("""{"cid":"film","title":"Film",
+            "pic_1920x800":"javascript:bad()","pic_1280x720":"https://media.example/hd.jpg"}""")).single()
+        assertEquals("https://media.example/hd.jpg", fallbackOnly.image)
+        assertTrue(ShelfWebFeeds.tencent(body("""{"cid":"film","title":"Film",
+            "image_url":"https://media.example/small.jpg","pic_ori_2x1":"https://media.example/logo.png"}""")).isEmpty())
+    }
+
     @Test fun capsDeduplicatesAndSkipsMalformedItems() {
         val docs = JSONArray()
-            .put(JSONObject().put("title", "Bad").put("imgUrlH", "file:///bad.jpg"))
-            .put(JSONObject().put("title", "").put("imgUrlH", "https://media.example/empty.jpg"))
+            .put(JSONObject().put("name", "Bad").put("jumpId", "1").put("jumpKind", "1").put("imgHUrl", "file:///bad.jpg"))
+            .put(JSONObject().put("name", "").put("jumpId", "1").put("jumpKind", "1").put("imgHUrl", "https://1vimg.hitv.com/empty.jpg"))
         repeat(20) { i ->
-            docs.put(JSONObject().put("title", "Film $i").put("imgUrlH", "https://media.example/$i.jpg"))
-            docs.put(JSONObject().put("title", "Film $i").put("imgUrlH", "https://media.example/duplicate.jpg"))
+            val item = JSONObject().put("name", "Film $i").put("jumpId", (i + 1).toString())
+                .put("jumpKind", "1").put("imgHUrl", "https://1vimg.hitv.com/$i.jpg")
+            docs.put(item)
+            docs.put(JSONObject(item.toString()))
         }
-        val body = JSONObject().put("code", 200).put("data", JSONObject().put("hitDocs", docs)).toString()
+        val module = JSONObject().put("moduleType", "banner").put("adId", 0).put("moduleData", docs)
+        val body = JSONObject().put("code", 200).put("data", JSONArray().put(module)).toString()
         val items = ShelfWebFeeds.mango(body)
         assertEquals(ShelfLimits.MAX_ITEMS, items.size)
         assertEquals("Film 0", items.first().title)
@@ -88,6 +109,33 @@ class ShelfWebFeedsTest {
         assertEquals("", request.getJSONObject("page_params").getString("ams_cookies"))
         assertEquals("", request.getJSONObject("page_bypass_params").getString("abtest_bypass_id"))
         assertFalse(request.toString().contains("auth_token"))
+        val mangoQuery = java.net.URI(ShelfWebFeeds.MANGO_URL).query.split('&').map { it.substringBefore('=') }.toSet()
+        assertEquals(setOf("vclassId", "type", "pageNo", "pageSize"), mangoQuery)
+    }
+
+    @Test fun mangoHomepageExcludesAdsExternalJumpsAndUnverifiedImageFields() {
+        val root = JSONObject(fixture("mango-featured.json"))
+        val module = root.getJSONArray("data").getJSONObject(0)
+        module.put("adId", 9)
+        assertTrue(ShelfWebFeeds.mango(root.toString()).isEmpty())
+        module.put("adId", 0).put("moduleType", "other")
+        assertTrue(ShelfWebFeeds.mango(root.toString()).isEmpty())
+        module.put("moduleType", "banner")
+        val valid = module.getJSONArray("moduleData").getJSONObject(0)
+        val cases = JSONArray()
+        cases.put(JSONObject(valid.toString()).put("name", "Ad").put("adId", 5))
+        cases.put(JSONObject(valid.toString()).put("name", "External").put("jumpKind", "99"))
+        cases.put(JSONObject(valid.toString()).put("name", "No programme").put("jumpId", "not-a-programme"))
+        cases.put(JSONObject(valid.toString()).put("name", "Other host").put("imgHUrl", "https://ads.example/image.jpg"))
+        val portrait = JSONObject(valid.toString()).put("name", "Portrait only").put("imgHVUrl", valid.getString("imgHUrl"))
+        portrait.remove("imgHUrl")
+        cases.put(portrait).put(valid)
+        module.put("moduleData", cases)
+        val item = ShelfWebFeeds.mango(root.toString()).single()
+        assertEquals(valid.getString("name"), item.title)
+        assertEquals(valid.getString("imgHUrl"), item.image)
+        assertTrue(item.requireHdArtwork)
+        assertTrue(ShelfWebFeeds.mango("""{"code":200,"data":{"hitDocs":[{"title":"Old small image","imgUrlH":"https://1vimg.hitv.com/small.jpg"}]}}""").isEmpty())
     }
 
     @Test fun parsesRealPublicRankingCardsWithDocumentedLandscapeCandidates() {

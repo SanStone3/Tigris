@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
+import kotlin.math.roundToInt
 
 /** Caps and checks for a user-supplied Top Shelf feed. Pure: no network and no Android APIs. */
 internal object ShelfLimits {
@@ -16,6 +17,19 @@ internal object ShelfLimits {
     const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
     const val MAX_IMAGE_EDGE = 1920
     const val MAX_URL_CHARS = 2048
+
+    fun artworkCandidates(primary: String, fallbacks: List<String>): List<String> =
+        (listOf(primary) + fallbacks).filter(::isHttpUrl).distinct().take(3)
+
+    fun isHdLandscape(width: Int, height: Int) = width >= 1280 && height >= 720 && width > height
+
+    /** An exact decode budget, preserving aspect ratio and never enlarging a small original. */
+    fun fittedSize(width: Int, height: Int, maxEdge: Int = MAX_IMAGE_EDGE): Pair<Int, Int> {
+        if (width <= 0 || height <= 0 || maxEdge <= 0) return 0 to 0
+        val scale = minOf(1.0, maxEdge.toDouble() / maxOf(width, height))
+        return (width * scale).roundToInt().coerceAtLeast(1) to
+            (height * scale).roundToInt().coerceAtLeast(1)
+    }
 
     fun isHttpUrl(raw: String): Boolean {
         val s = raw.trim()

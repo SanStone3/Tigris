@@ -179,7 +179,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             val next = (shelfIndex + 1) % shelfItems.size
             val item = shelfItems[next]
             net.execute {
-                val b = Shelf.image(this@HomeActivity, item.image)
+                val b = Shelf.image(this@HomeActivity, item)
                 main.post {
                     if (shelfAllowed(ticket) && shelfShown && shelfDelay() != null) {
                         if (b != null) showShelfItem(next, b)
@@ -1103,7 +1103,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val custom = shelfCustom()
         net.execute {
             val items = Shelf.items(pkg, custom)
-            val first = items.firstOrNull()?.let { Shelf.image(this, it.image) }
+            val first = items.firstOrNull()?.let { Shelf.image(this, it) }
             main.post {
                 if (!shelfAllowed(ticket) || first == null) return@post
                 shelfItems = items
@@ -1167,7 +1167,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             } }
         }
         // Fetch the next picture ahead of time.
-        if (shelfDelay() != null) shelfItems.getOrNull((i + 1) % shelfItems.size)?.let { n -> net.execute { Shelf.image(this, n.image) } }
+        if (shelfDelay() != null) shelfItems.getOrNull((i + 1) % shelfItems.size)?.let { n -> net.execute { Shelf.image(this, n) } }
     }
 
     private fun setShelfVisible(v: Boolean) {

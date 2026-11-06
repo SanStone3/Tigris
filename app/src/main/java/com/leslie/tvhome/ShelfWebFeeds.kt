@@ -2,6 +2,7 @@ package com.leslie.tvhome
 
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
 
 /**
  * Public website recommendations, never account history or TV playback links.
@@ -11,8 +12,8 @@ import org.json.JSONObject
 internal object ShelfWebFeeds {
     const val YOUKU_URL = "https://www.youku.com/ku/webhome"
     const val IQIYI_URL = "https://www.iqiyi.com/ranks1PCW/home"
-    // The official /lib/2 page's bundle uses this route; its channel config names c2 “最热”.
-    const val MANGO_URL = "https://pianku.api.mgtv.com/rider/list/pcweb/v3?platform=pcweb&channelId=2&pn=1&pc=12&hudong=1&_support=10000000&sort=c2"
+    // Anonymous public homepage banners: no account, device identifier or client-version impersonation.
+    const val MANGO_URL = "https://mob-st.bz.mgtv.com/odin/c1/channel/index?vclassId=60&type=10&pageNo=1&pageSize=10"
     // v.qq.com's anonymous channel prefetch. Empty identity/cookie fields are intentional.
     const val TENCENT_URL = "https://pbaccess.video.qq.com/trpc.vector_layout.page_view.PageService/getPage?video_appid=3000010&vversion_platform=2"
 
@@ -50,10 +51,17 @@ internal object ShelfWebFeeds {
         val root = JSONObject(text)
         if (root.optInt("code") != 200) return@safely emptyList()
         val out = ArrayList<Shelf.Item>()
-        // Ads live separately in data.advs; never traverse those objects.
-        root.optJSONObject("data")?.optJSONArray("hitDocs").objects().forEach { item ->
-            if (item.has("adId") || item.optBoolean("isAd")) return@forEach
-            add(out, item.optString("title"), item.optString("updateInfo"), item.optString("imgUrlH"), item.optString("img"))
+        root.optJSONArray("data").objects().forEach { module ->
+            if (module.optString("moduleType") != "banner" || module.optLong("adId", -1) != 0L) return@forEach
+            module.optJSONArray("moduleData").objects().forEach item@{ item ->
+                if (item.optString("jumpKind") !in setOf("1", "12") ||
+                    !item.optString("jumpId").matches(Regex("[1-9][0-9]{0,19}")) ||
+                    item.optBoolean("isAd") || item.optLong("adId", 0) != 0L) return@item
+                val image = httpsImage(item.optString("imgHUrl")) ?: return@item
+                val host = runCatching { URI(image).host }.getOrNull().orEmpty()
+                if (!Regex("[0-9]vimg\\.hitv\\.com").matches(host)) return@item
+                add(out, item.optString("name"), item.optString("subName"), image, requireHd = true)
+            }
         }
         out
     }
@@ -68,7 +76,9 @@ internal object ShelfWebFeeds {
             module.optJSONObject("children_list")?.optJSONObject("list")?.optJSONArray("cards").objects().forEach item@{ card ->
                 val item = card.optJSONObject("params") ?: return@item
                 if (item.optString("cid").isBlank() || item.has("ad_type") || item.has("advertiser_name")) return@item
-                add(out, item.optString("title"), item.optString("sub_title"), item.optString("image_url"))
+                // These are actual returned programme-art fields; larger-looking logo keys are excluded.
+                add(out, item.optString("title"), item.optString("sub_title"),
+                    item.optString("pic_1920x800"), item.optString("pic_1280x720"), requireHd = true)
             }
         }
         out
@@ -106,11 +116,14 @@ internal object ShelfWebFeeds {
         return value.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
     }
 
-    private fun add(out: MutableList<Shelf.Item>, title: String, meta: String, vararg pictures: String) {
+    private fun add(out: MutableList<Shelf.Item>, title: String, meta: String, vararg pictures: String,
+                    requireHd: Boolean = false) {
         val name = title.trim().take(ShelfLimits.MAX_TITLE)
         if (out.size >= ShelfLimits.MAX_ITEMS || name.isEmpty() || out.any { it.title == name }) return
-        val image = pictures.firstNotNullOfOrNull { httpsImage(it) } ?: return
-        out.add(Shelf.Item(name, meta.trim().take(ShelfLimits.MAX_META), image))
+        val images = pictures.mapNotNull(::httpsImage).distinct()
+        val image = images.firstOrNull() ?: return
+        out.add(Shelf.Item(name, meta.trim().take(ShelfLimits.MAX_META), image,
+            if (requireHd) images.drop(1) else emptyList(), requireHd))
     }
 
     private fun httpsImage(raw: String): String? {
