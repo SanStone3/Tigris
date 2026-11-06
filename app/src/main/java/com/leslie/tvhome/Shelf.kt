@@ -24,6 +24,7 @@ object Shelf {
     data class Item(
         val title: String, val meta: String, val image: String,
         val fallbackImages: List<String> = emptyList(), val requireHdArtwork: Boolean = false,
+        val requireFullHdArtwork: Boolean = false,
     )
     data class Source(val name: String, val fetch: () -> List<Item>)
 
@@ -33,7 +34,6 @@ object Shelf {
     internal enum class ShelfPick { CUSTOM, BUILTIN, NONE }
 
     private const val UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-    private const val TTL = 15 * 60_000L
     /** Built-in responses are small; the cap only stops a runaway body. */
     private const val BUILTIN_JSON_BYTES = 2 * 1024 * 1024
 
@@ -49,6 +49,7 @@ object Shelf {
         "com.gitvdemo.video" to "iqiyi",
         "com.ktcp.video" to "tencent",
         "com.hunantv.market" to "mango",
+        "com.starcor.mango" to "mango",
     )
 
     private data class Cached(val at: Long, val name: String, val items: List<Item>)
@@ -74,6 +75,12 @@ object Shelf {
     }
     private val cache = HashMap<String, Cached>()
     private val shownName = HashMap<String, String>()
+    private val artworkLocks = Array(32) { Any() }
+    private val artworkBudgetLock = Any()
+    private val rejectedArtwork = ShelfArtworkRejections()
+
+    private fun builtInKey(pkg: String) = builtInPackages[pkg]?.let { "builtin\u0000$it" }
+    private fun customKey(pkg: String, custom: Custom) = "custom\u0000$pkg\u0000${custom.url.trim()}"
 
     /**
      * Custom wins only when the linked package matches and the body was usable.
@@ -94,67 +101,119 @@ object Shelf {
     }
 
     /** Items for [pkg], cached for a while; empty if the app has no shelf or the network failed. */
-    fun items(pkg: String, custom: Custom? = null): List<Item> {
+    fun items(pkg: String, custom: Custom? = null, isCurrent: () -> Boolean = { true }): List<Item> {
+        if (!isCurrent()) return emptyList()
         if (pickShelf(pkg, custom, customOk = true) == ShelfPick.CUSTOM) {
             val url = custom!!.url.trim()
-            val key = "custom\u0000$pkg\u0000$url"
-            readCache(key, pkg)?.let { return it }
-            val fetched = try {
-                fetchCustom(url)
-            } catch (e: Exception) {
-                Log.w("Shelf", "custom $pkg failed", e)
-                null
+            val key = customKey(pkg, custom)
+            var fetched = readCache(key, pkg)
+            if (fetched == null) {
+                fetched = try {
+                    fetchCustom(url, isCurrent)
+                } catch (e: Exception) {
+                    if (isCurrent()) Log.w("Shelf", "custom $pkg failed", e)
+                    null
+                }
+                if (!isCurrent()) return emptyList()
+                // Cache failed attempts too, so a wallpaper-only app retries at the same cadence.
+                writeCache(key, pkg, I18n.text(R.string.shelf_custom_source), fetched.orEmpty())
             }
             if (!fetched.isNullOrEmpty()) {
-                val name = I18n.text(R.string.shelf_custom_source)
-                writeCache(key, pkg, name, fetched)
                 return fetched
             }
         }
+        if (!isCurrent()) return emptyList()
         val src = sources[pkg] ?: return emptyList()
-        readCache(pkg, pkg)?.let { return it }
+        val key = builtInKey(pkg) ?: return emptyList()
+        readCache(key, pkg)?.let { return it }
         val list = try {
             src.fetch()
         } catch (e: Exception) {
             Log.w("Shelf", "$pkg failed", e)
             emptyList()
         }
-        if (list.isNotEmpty()) writeCache(pkg, pkg, src.name, list)
+        if (!isCurrent()) return emptyList()
+        writeCache(key, pkg, src.name, list)
         return list
     }
 
+    /** How long the current dock source can remain on screen before its cached feed expires. */
+    fun refreshDelayMs(pkg: String, custom: Custom? = null): Long = synchronized(cache) {
+        val now = System.currentTimeMillis()
+        val deadlines = ArrayList<Long>(2)
+        if (pickShelf(pkg, custom, customOk = true) == ShelfPick.CUSTOM) {
+            val hit = cache[customKey(pkg, custom!!)]
+            val delay = ShelfRefreshPolicy.delayMs(hit?.at, now)
+            if (!hit?.items.isNullOrEmpty()) return@synchronized delay
+            deadlines.add(delay)
+        }
+        builtInKey(pkg)?.let { deadlines.add(ShelfRefreshPolicy.delayMs(cache[it]?.at, now)) }
+        deadlines.minOrNull() ?: ShelfRefreshPolicy.TTL_MS
+    }
+
     /** Downloads (or reads from the disk cache) an item's picture. */
-    fun image(ctx: Context, item: Item): Bitmap? {
+    fun image(ctx: Context, item: Item, isCurrent: () -> Boolean = { true }): Bitmap? {
         for (url in ShelfLimits.artworkCandidates(item.image, item.fallbackImages)) {
-            image(ctx, url, item.requireHdArtwork)?.let { return it }
+            if (!isCurrent()) return null
+            image(ctx, url, item.requireHdArtwork, item.requireFullHdArtwork, isCurrent)?.let { return it }
         }
         return null
     }
 
-    fun image(ctx: Context, url: String): Bitmap? = image(ctx, url, false)
+    fun image(ctx: Context, url: String): Bitmap? = image(ctx, url, false, false) { true }
 
-    private fun image(ctx: Context, url: String, requireHd: Boolean): Bitmap? {
-        if (!ShelfLimits.isHttpUrl(url)) return null
+    private fun image(ctx: Context, url: String, requireHd: Boolean, requireFullHd: Boolean, isCurrent: () -> Boolean): Bitmap? =
+        synchronized(artworkLocks[(url.hashCode() and Int.MAX_VALUE) % artworkLocks.size]) artwork@ {
+        if (!isCurrent() || !ShelfLimits.isHttpUrl(url)) return@artwork null
+        val checkedArtwork = requireHd || requireFullHd || IqiyiArtworkPolicy.isLandscapeCandidate(url)
+        val rejectionKey = "$requireFullHd:$checkedArtwork:$url"
+        if (checkedArtwork && rejectedArtwork.contains(rejectionKey, System.currentTimeMillis())) return@artwork null
         val dir = File(ctx.cacheDir, "shelf").apply { mkdirs() }
         val f = File(dir, Integer.toHexString(url.hashCode()) + ".jpg")
-        val checkedArtwork = requireHd || IqiyiArtworkPolicy.isLandscapeCandidate(url)
         val tmp = File(dir, f.name + ".part")
-        if (!f.exists()) try {
-            tmp.writeBytes(get(url, ShelfLimits.MAX_IMAGE_BYTES))
-            tmp.renameTo(f)
-            // Keep the cache small: the newest 60 pictures.
-            dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(60)?.forEach { it.delete() }
+        val maxBytes = ShelfLimits.imageBytes(requireFullHd)
+        // A shared URL previously cached by a Full HD feed does not raise a custom feed's budget.
+        if (f.exists() && f.length() > maxBytes) return@artwork null
+        try {
+            val download = !f.exists()
+            if (download) {
+                tmp.writeBytes(get(url, maxBytes, isCurrent = isCurrent))
+                if (!isCurrent()) { tmp.delete(); return@artwork null }
+            }
+            // Only publishing and accounting share a global lock; unrelated downloads/decode can overlap.
+            synchronized(artworkBudgetLock) {
+                if (download && !tmp.renameTo(f)) throw java.io.IOException("could not cache shelf artwork")
+                f.setLastModified(System.currentTimeMillis())
+                val files = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".jpg") }.orEmpty()
+                val evictions = ShelfDiskBudget.evictions(files.map { ShelfDiskBudget.Entry(it.name, it.length(), it.lastModified()) }).toSet()
+                files.filter { it.name in evictions }.forEach { it.delete() }
+            }
         } catch (e: Exception) {
-            if (checkedArtwork) { tmp.delete(); f.delete() }
-            Log.w("Shelf", "image $url failed", e)
-            return null
+            tmp.delete()
+            if (isCurrent()) Log.w("Shelf", "image $url failed", e)
+            return@artwork null
+        }
+        if (!isCurrent()) return@artwork null
+        fun accepted(width: Int, height: Int) = when {
+            requireFullHd -> ShelfLimits.isFullHdLandscape(width, height)
+            checkedArtwork -> ShelfLimits.isHdLandscape(width, height)
+            else -> true
+        }
+        fun reject() {
+            if (checkedArtwork) rejectedArtwork.add(rejectionKey, System.currentTimeMillis())
+            f.delete()
         }
         var bitmap: Bitmap? = null
-        return runCatching {
-            val decoded = decodeCapped(f.path)
+        runCatching {
+            // Validate the downloaded file's native bounds before sampling or scaling it.
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(f.path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) { f.delete(); return@runCatching null }
+            if (!accepted(bounds.outWidth, bounds.outHeight)) { reject(); return@runCatching null }
+            val decoded = decodeCapped(f.path, isCurrent)
             bitmap = decoded
-            if (decoded == null || checkedArtwork && !ShelfLimits.isHdLandscape(decoded.width, decoded.height)) {
-                if (checkedArtwork) { tmp.delete(); f.delete() }
+            if (decoded == null || !isCurrent() || !accepted(decoded.width, decoded.height)) {
+                if (decoded != null && isCurrent()) reject()
                 decoded?.recycle()
                 bitmap = null
                 return@runCatching null
@@ -162,8 +221,9 @@ object Shelf {
             val trimmed = trimBars(decoded)
             if (trimmed !== decoded) decoded.recycle()
             bitmap = trimmed
-            if (checkedArtwork && !ShelfLimits.isHdLandscape(trimmed.width, trimmed.height)) {
-                tmp.delete(); f.delete(); trimmed.recycle(); bitmap = null
+            if (!isCurrent() || !accepted(trimmed.width, trimmed.height)) {
+                if (isCurrent()) reject()
+                trimmed.recycle(); bitmap = null
                 return@runCatching null
             }
             darken(trimmed).also {
@@ -173,13 +233,13 @@ object Shelf {
             }
         }.onFailure {
             bitmap?.takeUnless { it.isRecycled }?.recycle()
-            if (checkedArtwork) { tmp.delete(); f.delete() }
+            f.delete()
             Log.w("Shelf", "decode $url failed", it)
         }.getOrNull()
     }
 
-    private fun fetchCustom(url: String): List<Item>? {
-        val text = get(url, ShelfLimits.MAX_JSON_BYTES).toString(Charsets.UTF_8)
+    private fun fetchCustom(url: String, isCurrent: () -> Boolean): List<Item>? {
+        val text = get(url, ShelfLimits.MAX_JSON_BYTES, isCurrent = isCurrent).toString(Charsets.UTF_8)
         val parsed = ShelfJson.parse(text) ?: return null
         if (parsed.isEmpty()) return null
         return parsed.map { Item(it.title, it.meta, it.image) }
@@ -187,8 +247,8 @@ object Shelf {
 
     private fun readCache(key: String, pkg: String): List<Item>? = synchronized(cache) {
         val hit = cache[key] ?: return null
-        if (System.currentTimeMillis() - hit.at >= TTL) return null
-        shownName[pkg] = hit.name
+        if (ShelfRefreshPolicy.delayMs(hit.at, System.currentTimeMillis()) == 0L) return null
+        if (hit.items.isNotEmpty()) shownName[pkg] = hit.name
         hit.items
     }
 
@@ -199,7 +259,8 @@ object Shelf {
         }
     }
 
-    private fun decodeCapped(path: String): Bitmap? {
+    private fun decodeCapped(path: String, isCurrent: () -> Boolean): Bitmap? {
+        if (!isCurrent()) return null
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         BitmapFactory.decodeFile(path, bounds)
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
@@ -209,9 +270,15 @@ object Shelf {
             inMutable = true
         }
         val decoded = BitmapFactory.decodeFile(path, opts) ?: return null
+        if (!isCurrent()) { decoded.recycle(); return null }
         val (width, height) = ShelfLimits.fittedSize(decoded.width, decoded.height)
         if (width == decoded.width && height == decoded.height) return decoded
-        return try { Bitmap.createScaledBitmap(decoded, width, height, true) }
+        return try {
+            Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888).also { out ->
+                android.graphics.Canvas(out).drawBitmap(decoded, null, android.graphics.Rect(0, 0, width, height),
+                    android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG))
+            }
+        }
         finally { decoded.recycle() }
     }
 
@@ -241,17 +308,21 @@ object Shelf {
         var bottom = b.height
         while (bottom > b.height * 3 / 4 && dark(bottom - 1)) bottom--
         if (top < 4 && b.height - bottom < 4) return b
-        return Bitmap.createBitmap(b, 0, top, b.width, bottom - top)
+        return Bitmap.createBitmap(b.width, bottom - top, Bitmap.Config.ARGB_8888).also { out ->
+            android.graphics.Canvas(out).drawBitmap(b, android.graphics.Rect(0, top, b.width, bottom),
+                android.graphics.Rect(0, 0, out.width, out.height), null)
+        }
     }
 
     private fun bilibili(): List<Item> {
         val list = JSONObject(get("https://api.bilibili.com/x/web-interface/popular?ps=12&pn=1", BUILTIN_JSON_BYTES).decodeToString())
             .getJSONObject("data").getJSONArray("list")
-        return (0 until list.length()).map { list.getJSONObject(it) }.map { v ->
+        return (0 until minOf(list.length(), ShelfLimits.MAX_ITEMS)).map { list.getJSONObject(it) }.map { v ->
             Item(
                 v.optString("title"),
                 I18n.text(R.string.i18n_shelf_003, v.getJSONObject("owner").optString("name"), count(v.getJSONObject("stat").optLong("view"))),
                 v.optString("pic").replace("http://", "https://"),
+                requireFullHdArtwork = true,
             )
         }
     }
@@ -286,7 +357,8 @@ object Shelf {
         }
     }
 
-    private fun get(url: String, maxBytes: Int, body: String? = null): ByteArray {
+    private fun get(url: String, maxBytes: Int, body: String? = null, isCurrent: () -> Boolean = { true }): ByteArray {
+        if (!isCurrent()) throw java.io.IOException("shelf request cancelled")
         val c = URL(url).openConnection() as HttpURLConnection
         c.connectTimeout = 5000
         c.readTimeout = 8000
@@ -305,7 +377,7 @@ object Shelf {
             if (c.responseCode != 200) throw java.io.IOException("HTTP ${c.responseCode}")
             val advertised = c.contentLengthLong
             if (advertised > maxBytes) throw java.io.IOException("response too large")
-            return c.inputStream.use { ShelfLimits.readAtMost(it, maxBytes) }
+            return c.inputStream.use { ShelfLimits.readAtMost(it, maxBytes, isCurrent) }
         } finally {
             c.disconnect()
         }

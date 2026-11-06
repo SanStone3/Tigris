@@ -168,23 +168,33 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private var shelfIndex = 0
     private var shelfShown = false
     private val shelfSession = ShelfSession()
+    private val shelfFeedRequests = ShelfFeedRequests()
     private var shelfRender = 0L
     private var shelfTransition = 0L
+    private var shelfAdvancing: ShelfSession.Ticket? = null
     private val shelfShow = Runnable { pendingShelf?.let { showShelf(it) } }
+    private val shelfRefresh = Runnable {
+        shelfSession.current?.takeIf { shelfAllowed(it) }?.let { showShelf(it.pkg) }
+    }
     private val shelfAdvance = object : Runnable {
         override fun run() {
             if (!shelfShown || shelfItems.size < 2 || shelfDelay() == null) return
             val ticket = shelfSession.current ?: return
-            if (!shelfAllowed(ticket)) return
-            val next = (shelfIndex + 1) % shelfItems.size
-            val item = shelfItems[next]
+            if (!shelfAllowed(ticket) || shelfAdvancing == ticket || shelfFeedRequests.isLoading(ticket)) return
+            val items = shelfItems
+            val next = (shelfIndex + 1) % items.size
+            shelfAdvancing = ticket
             net.execute {
-                val b = Shelf.image(this@HomeActivity, item)
+                val selected = ShelfCandidateScan.first(items, next, items.size - 1,
+                    isCurrent = { shelfSession.accepts(ticket) }, discard = { b: Bitmap -> b.recycle() }) {
+                    Shelf.image(this@HomeActivity, it) { shelfSession.accepts(ticket) }
+                }
                 main.post {
+                    if (shelfAdvancing == ticket) shelfAdvancing = null
                     if (shelfAllowed(ticket) && shelfShown && shelfDelay() != null) {
-                        if (b != null) showShelfItem(next, b)
+                        if (selected != null) showShelfItem(selected.index, selected.value)
                         scheduleShelfAdvance()
-                    }
+                    } else selected?.value?.recycle()
                 }
             }
         }
@@ -723,6 +733,9 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         scene.addView(grid, match())
         header.bringToFront()
         setContentView(root)
+        root.viewTreeObserver.addOnGlobalFocusChangeListener { _, _ ->
+            if (!grid.hasFocus()) pauseShelfRotation()
+        }
     }
 
     /** Called by the home-screen minute ticker only; never does network work while off. */
@@ -1067,10 +1080,14 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     private fun shelfDelay() = ShelfPresentation.delayMs(prefs.shelfRotation, prefs.shelfSeconds)
 
-    private fun shelfEligible(pkg: String): Boolean = resumed && !homeClosing && !isDestroyed &&
-        welcome == null && intro == null && sheets.isEmpty() && dialogs.isEmpty() && !control.isOpen && moving < 0 &&
-        grid.hasFocus() && focusedPos < cols && adapter.apps.getOrNull(focusedPos)?.pkg == pkg &&
+    private fun shelfDockTarget(pkg: String): Boolean = focusedPos in 0 until cols &&
+        adapter.apps.getOrNull(focusedPos)?.pkg == pkg &&
         ShelfPresentation.enabled(pkg, prefs.shelfWallpaperPackages) && Shelf.has(pkg, shelfCustom())
+
+    private fun shelfEligible(pkg: String): Boolean = resumed && !homeClosing && !isDestroyed &&
+        hasWindowFocus() &&
+        welcome == null && intro == null && sheets.isEmpty() && dialogs.isEmpty() && !control.isOpen && moving < 0 &&
+        grid.hasFocus() && shelfDockTarget(pkg)
 
     private fun shelfAllowed(ticket: ShelfSession.Ticket) = shelfSession.accepts(ticket) &&
         shelfPkg == ticket.pkg && shelfEligible(ticket.pkg)
@@ -1079,15 +1096,32 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         main.removeCallbacks(shelfAdvance)
         val delay = shelfDelay() ?: return
         val ticket = shelfSession.current ?: return
-        if (shelfShown && shelfItems.size > 1 && shelfAllowed(ticket)) main.postDelayed(shelfAdvance, delay)
+        if (shelfShown && shelfItems.size > 1 && shelfAllowed(ticket) && shelfAdvancing != ticket &&
+            !shelfFeedRequests.isLoading(ticket)) main.postDelayed(shelfAdvance, delay)
+    }
+
+    private fun scheduleShelfRefresh() {
+        main.removeCallbacks(shelfRefresh)
+        val ticket = shelfSession.current ?: return
+        if (shelfAllowed(ticket) && !shelfFeedRequests.isLoading(ticket)) {
+            main.postDelayed(shelfRefresh, Shelf.refreshDelayMs(ticket.pkg, shelfCustom()))
+        }
     }
 
     private fun refreshShelfFocus() {
         val pkg = adapter.apps.getOrNull(focusedPos)?.pkg
-        if (pkg == null || !shelfEligible(pkg)) { hideShelf(); return }
-        if (shelfShown && shelfPkg == pkg) {
-            if (shelfSession.current == null) shelfSession.begin(pkg)
+        val awaitingGrid = !grid.hasFocus() && (focusPending || (resumeFocusPending && resumeHeader == null))
+        val restoringDock = awaitingGrid && canRestoreGrid() && moving < 0 && pkg != null && shelfDockTarget(pkg)
+        when (ShelfFocusPolicy.action(resumed, hasWindowFocus(), pkg != null && shelfEligible(pkg), restoringDock)) {
+            ShelfFocusPolicy.Action.PAUSE -> { pauseShelfRotation(); return }
+            ShelfFocusPolicy.Action.HIDE -> { hideShelf(); return }
+            ShelfFocusPolicy.Action.ACTIVE -> Unit
+        }
+        if (pkg == null) return
+        if (shelfPkg == pkg) {
+            if (shelfSession.current == null) { showShelf(pkg); return }
             scheduleShelfAdvance()
+            scheduleShelfRefresh()
         } else if (pendingShelf != pkg) {
             hideShelf()
             pendingShelf = pkg
@@ -1098,14 +1132,29 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun showShelf(pkg: String) {
         pendingShelf = null
         if (!shelfEligible(pkg)) return
+        shelfSession.current?.takeIf { it.pkg == pkg && shelfFeedRequests.isLoading(it) }?.let { return }
+        val current = shelfItems.getOrNull(shelfIndex).takeIf { shelfShown && shelfPkg == pkg }
         shelfPkg = pkg
+        main.removeCallbacks(shelfAdvance)
+        main.removeCallbacks(shelfRefresh)
+        shelfAdvancing = null
         val ticket = shelfSession.begin(pkg)
+        shelfFeedRequests.begin(ticket)
         val custom = shelfCustom()
         net.execute {
-            val items = Shelf.items(pkg, custom)
-            val first = items.firstOrNull()?.let { Shelf.image(this, it) }
+            val items = Shelf.items(pkg, custom) { shelfSession.accepts(ticket) }
+            val retained = ShelfRefreshPolicy.retainedIndex(items, current) { a, b ->
+                a.title == b.title && a.image == b.image && a.fallbackImages == b.fallbackImages &&
+                    a.requireHdArtwork == b.requireHdArtwork && a.requireFullHdArtwork == b.requireFullHdArtwork
+            }
+            val first = if (retained >= 0) null else ShelfCandidateScan.first(items,
+                isCurrent = { shelfSession.accepts(ticket) }, discard = { b: Bitmap -> b.recycle() }) {
+                Shelf.image(this, it) { shelfSession.accepts(ticket) }
+            }
             main.post {
-                if (!shelfAllowed(ticket) || first == null) return@post
+                if (!shelfFeedRequests.finish(ticket) || !shelfAllowed(ticket)) {
+                    first?.value?.recycle(); return@post
+                }
                 shelfItems = items
                 shelfSource.text = Shelf.sourceName(pkg)
                 shelfDots.removeAllViews()
@@ -1113,15 +1162,25 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                     shelfDots.addView(View(this).apply { background = rounded(Color.WHITE, dp(4).toFloat()) },
                         LinearLayout.LayoutParams(dp(7), dp(7)).apply { marginStart = dp(7) })
                 }
-                showShelfItem(0, first)
-                setShelfVisible(true)
+                when {
+                    retained >= 0 -> {
+                        shelfIndex = retained
+                        updateShelfInfo(retained)
+                    }
+                    first != null -> {
+                        showShelfItem(first.index, first.value)
+                        setShelfVisible(true)
+                    }
+                    else -> setShelfVisible(false)
+                }
                 scheduleShelfAdvance()
+                scheduleShelfRefresh()
             }
         }
     }
 
     private fun showShelfItem(i: Int, b: Bitmap) {
-        val item = shelfItems.getOrNull(i) ?: return
+        if (i !in shelfItems.indices) return
         val ticket = shelfSession.current ?: return
         if (!shelfAllowed(ticket)) return
         val render = ++shelfRender
@@ -1143,10 +1202,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         shelfInfo.animate().cancel()
         shelfInfo.alpha = 0f
         shelfInfo.translationY = dp(10).toFloat()
-        shelfTitle.text = item.title
-        shelfMeta.text = item.meta
+        updateShelfInfo(i)
         shelfInfo.animate().alpha(1f).translationY(0f).setDuration(450).setStartDelay(150).start()
-        for (k in 0 until shelfDots.childCount) shelfDots.getChildAt(k).alpha = if (k == i) 1f else 0.35f
         // The dock refracts the new picture.
         io.execute {
             // The picture already carries the scrim (see Shelf.darken).
@@ -1166,8 +1223,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
                 setDock(glass, 600)
             } }
         }
-        // Fetch the next picture ahead of time.
-        if (shelfDelay() != null) shelfItems.getOrNull((i + 1) % shelfItems.size)?.let { n -> net.execute { Shelf.image(this, n) } }
+    }
+
+    private fun updateShelfInfo(i: Int) {
+        val item = shelfItems.getOrNull(i) ?: return
+        shelfTitle.text = item.title
+        shelfMeta.text = item.meta
+        for (k in 0 until shelfDots.childCount) shelfDots.getChildAt(k).alpha = if (k == i) 1f else 0.35f
     }
 
     private fun setShelfVisible(v: Boolean) {
@@ -1203,8 +1265,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     private fun hideShelf() {
         main.removeCallbacks(shelfShow)
         main.removeCallbacks(shelfAdvance)
+        main.removeCallbacks(shelfRefresh)
         pendingShelf = null
         shelfPkg = null
+        shelfItems = emptyList()
+        shelfAdvancing = null
+        shelfFeedRequests.cancel()
         shelfSession.invalidate()
         setShelfVisible(false)
     }
@@ -1212,7 +1278,10 @@ class HomeActivity : Activity(), TileAdapter.Listener {
     fun pauseShelfRotation() {
         main.removeCallbacks(shelfShow)
         main.removeCallbacks(shelfAdvance)
+        main.removeCallbacks(shelfRefresh)
         pendingShelf = null
+        shelfAdvancing = null
+        shelfFeedRequests.cancel()
         shelfSession.invalidate()
     }
 
@@ -1356,6 +1425,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             view.requestFocus()
             restoringFocus = false
             focusPending = false
+            // requestFocus may synchronously call onTileFocused while focusPending is still true.
+            refreshShelfFocus()
             return true
         }
         if (restoreScroll == null && apply()) return
@@ -1724,9 +1795,12 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         val now = SystemClock.elapsedRealtime()
         HomeForeground.windowFocus(hasFocus, now)
         if (!resumed) return
-        if (!hasFocus) cancelIdle()
-        else if (HomeForeground.isDreamBounce(now)) armIdle(resetDeadline = false)
-        else armIdle(resetDeadline = true)
+        if (!hasFocus) { cancelIdle(); pauseShelfRotation() }
+        else {
+            if (HomeForeground.isDreamBounce(now)) armIdle(resetDeadline = false)
+            else armIdle(resetDeadline = true)
+            resumeShelfRotation()
+        }
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {

@@ -36,7 +36,8 @@
           "height": 1080
         }
       ],
-      "higherResolution": "Not established in this audit; 1920x1080 is the measured sample size, not a claimed platform maximum."
+      "higherResolution": "Not established in this audit; 1920x1080 is the measured sample size, not a claimed platform maximum.",
+      "runtimePolicy": "Use only editorial hImg and require native >=1920x1080 near16:9; never substitute the portrait img field."
     }
   },
   "iqiyi": {
@@ -173,7 +174,40 @@
         "height": 844
       }
     ],
-    "qualityBoundary": "Former popular-list images remained 750x420 even with the official resize syntax. New verified originals are 1500x844, not 1080p or 4K."
+    "qualityBoundary": "Strict FullHD is NOT yet verified for Mango: all six current anonymous featured originals tested at 1500x844; runtime now rejects them and leaves wallpaper visible. This does not prove the platform lacks 1920x1080 assets.",
+    "tvPackages": [
+      {
+        "package": "com.hunantv.market",
+        "evidence": "https://tc.coocaa.ottcn.com/appstore/appstorev3/thirdAppVersion?pkgs=%5Bcom.hunantv.market%5D"
+      },
+      {
+        "package": "com.starcor.mango",
+        "versionName": "7.1.701.383.3.DBEI_TVAPP.0.0_Release",
+        "versionCode": 26080318,
+        "sourcePage": "https://down.znds.com/apk/tv/2015/0203/1613.html",
+        "apk": "https://apps.dangbei.net/down/20260813/mgtvDBEI_7.1.701_dangbei.apk",
+        "apkSha256": "2ace999b2206e5fc5aec8242e72f5145bdbe6efca5d82c2272c678375e12f250"
+      }
+    ],
+    "runtimePolicy": "Require actual native >=1920x1080 near16:9; keep online refresh and wallpaper fallback until a qualifying current source is obtained.",
+    "currentTvProbe": {
+      "sourceType": "Anonymous TV navigation from the public TV distribution APK",
+      "navigationHttp": 200,
+      "navigationErrno": "0",
+      "currentFilmChannel": "4772751",
+      "currentChannelHttp": 200,
+      "currentChannelCode": 200,
+      "currentChannelModuleListCount": 0,
+      "v2ChannelHttp": 403,
+      "legacyChannel": "52",
+      "legacyProgrammeYear": 2021,
+      "legacyOttImageSize": [
+        867,
+        500
+      ],
+      "dailyCurrentFullHdSourceVerified": false,
+      "accountOrDeviceIdentifiersUsed": false
+    }
   },
   "quarkTv": {
     "officialPage": "https://pan.quark.cn/?page_info=1",
@@ -193,7 +227,7 @@
       "com.xiaodianshi.tv.yst",
       "com.tutu.myblbl"
     ],
-    "imageSelection": "Use the returned original pic without adding a 1280-pixel rendition. Actual uploader source sizes vary; no upscaling or 4K guarantee.",
+    "imageSelection": "Dynamic public UGC popular list (12 candidates); verify the image native dimensions, not video dimensions. Show only >=1920x1080 near16:9 originals; skip smaller entries without upscaling.",
     "imageProbes": [
       {
         "title": "【2026全球总决赛】11月6日 DK vs BLG",
@@ -222,7 +256,17 @@
         "width": 1920,
         "height": 1080
       }
-    ]
+    ],
+    "fullHdAudit": {
+      "sampleCount": 30,
+      "qualifiedCount": 20,
+      "qualifiedInFirst12": 7,
+      "minWidth": 1920,
+      "minHeight": 1080,
+      "aspectRatioTolerance": 0.01,
+      "allQualifiedBelow2MiB": true,
+      "scope": "Both already mapped TV packages share this source; the sample programme IDs are evidence only and are not a runtime allowlist."
+    }
   },
   "douyu": {
     "api": "https://www.douyu.com/japi/weblist/apinc/allpage/6/1",
@@ -257,6 +301,27 @@
         "height": 720
       }
     ],
-    "higherResolution": "Not established; observed current covers vary, including a smaller custom cover."
+    "higherResolution": "Not established; observed current covers vary, including a smaller custom cover.",
+    "scope": "User explicitly excludes Douyu from this TV installation and acceptance; original adapter remains dormant for compatibility, no further work."
+  },
+  "runtimeArtworkPolicy": {
+    "priorityTvApps": [
+      "bilibili",
+      "mango",
+      "youku"
+    ],
+    "nativeFullHd": [
+      1920,
+      1080
+    ],
+    "ratio": "16:9, absolute ratio tolerance 0.01",
+    "newFullHdImageMaxBytes": 5242880,
+    "legacyAndCustomImageMaxBytes": 2097152,
+    "decodeLongestEdgeMax": 1920,
+    "cacheMaxFiles": 60,
+    "cacheMaxBytes": 125829120,
+    "sourceCacheAndForegroundRefreshMs": 900000,
+    "refreshScope": "Only the current focused Dock source while foreground and window-focused; stop on pause, overlay and destroy. Retain a still-valid current programme when rotation is disabled.",
+    "sampleUse": "Fixtures and investigation samples do not provide runtime content; every refresh queries the live configured source."
   }
 }

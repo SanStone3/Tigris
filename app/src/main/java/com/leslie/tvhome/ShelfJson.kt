@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
 import java.net.URI
+import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /** Caps and checks for a user-supplied Top Shelf feed. Pure: no network and no Android APIs. */
@@ -15,6 +16,7 @@ internal object ShelfLimits {
     const val MAX_META = 180
     const val MAX_JSON_BYTES = 512 * 1024
     const val MAX_IMAGE_BYTES = 2 * 1024 * 1024
+    const val MAX_FULL_HD_IMAGE_BYTES = 5 * 1024 * 1024
     const val MAX_IMAGE_EDGE = 1920
     const val MAX_URL_CHARS = 2048
 
@@ -22,6 +24,11 @@ internal object ShelfLimits {
         (listOf(primary) + fallbacks).filter(::isHttpUrl).distinct().take(3)
 
     fun isHdLandscape(width: Int, height: Int) = width >= 1280 && height >= 720 && width > height
+
+    fun isFullHdLandscape(width: Int, height: Int) = width >= 1920 && height >= 1080 &&
+        abs(width.toDouble() / height - 16.0 / 9) <= 0.01
+
+    fun imageBytes(requireFullHd: Boolean) = if (requireFullHd) MAX_FULL_HD_IMAGE_BYTES else MAX_IMAGE_BYTES
 
     /** An exact decode budget, preserving aspect ratio and never enlarging a small original. */
     fun fittedSize(width: Int, height: Int, maxEdge: Int = MAX_IMAGE_EDGE): Pair<Int, Int> {
@@ -54,12 +61,13 @@ internal object ShelfLimits {
         return sample
     }
 
-    fun readAtMost(input: InputStream, maxBytes: Int): ByteArray {
+    fun readAtMost(input: InputStream, maxBytes: Int, isCurrent: () -> Boolean = { true }): ByteArray {
         if (maxBytes < 0) throw IOException("response too large")
         val out = ByteArrayOutputStream()
         val buf = ByteArray(8192)
         var total = 0
         while (true) {
+            if (!isCurrent()) throw IOException("shelf request cancelled")
             val n = input.read(buf)
             if (n < 0) break
             if (n == 0) continue

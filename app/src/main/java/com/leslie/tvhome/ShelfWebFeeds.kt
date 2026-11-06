@@ -40,7 +40,7 @@ internal object ShelfWebFeeds {
                     if (item.has("rawAdData") || item.optBoolean("isYkAd") ||
                         item.optBoolean("ad_flag") || item.has("ku_ad_type")) return@item
                     if (item.optString("action_type") !in setOf("JUMP_TO_SHOW", "JUMP_TO_VIDEO")) return@item
-                    add(out, item.optString("title"), item.optString("desc"), item.optString("hImg"), item.optString("img"))
+                    add(out, item.optString("title"), item.optString("desc"), item.optString("hImg"), requireFullHd = true)
                 }
             }
         }
@@ -60,7 +60,7 @@ internal object ShelfWebFeeds {
                 val image = httpsImage(item.optString("imgHUrl")) ?: return@item
                 val host = runCatching { URI(image).host }.getOrNull().orEmpty()
                 if (!Regex("[0-9]vimg\\.hitv\\.com").matches(host)) return@item
-                add(out, item.optString("name"), item.optString("subName"), image, requireHd = true)
+                add(out, item.optString("name"), item.optString("subName"), image, requireFullHd = true)
             }
         }
         out
@@ -117,13 +117,14 @@ internal object ShelfWebFeeds {
     }
 
     private fun add(out: MutableList<Shelf.Item>, title: String, meta: String, vararg pictures: String,
-                    requireHd: Boolean = false) {
+                    requireHd: Boolean = false, requireFullHd: Boolean = false) {
         val name = title.trim().take(ShelfLimits.MAX_TITLE)
         if (out.size >= ShelfLimits.MAX_ITEMS || name.isEmpty() || out.any { it.title == name }) return
         val images = pictures.mapNotNull(::httpsImage).distinct()
         val image = images.firstOrNull() ?: return
         out.add(Shelf.Item(name, meta.trim().take(ShelfLimits.MAX_META), image,
-            if (requireHd) images.drop(1) else emptyList(), requireHd))
+            fallbackImages = if (requireHd || requireFullHd) images.drop(1) else emptyList(),
+            requireHdArtwork = requireHd, requireFullHdArtwork = requireFullHd))
     }
 
     private fun httpsImage(raw: String): String? {

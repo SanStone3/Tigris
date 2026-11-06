@@ -102,7 +102,7 @@ internal object FocusMotionPolicy {
 internal class ShelfSession {
     data class Ticket(val generation: Long, val pkg: String)
     private var generation = 0L
-    var current: Ticket? = null
+    @Volatile var current: Ticket? = null
         private set
     fun begin(pkg: String): Ticket = Ticket(++generation, pkg).also { current = it }
     fun accepts(ticket: Ticket) = current == ticket

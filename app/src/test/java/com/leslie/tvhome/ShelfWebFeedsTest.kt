@@ -26,7 +26,8 @@ class ShelfWebFeedsTest {
             assertTrue(ShelfLimits.isHttpUrl(it.image))
             assertTrue(it.title.isNotBlank())
         }
-        assertTrue(mango.all { it.requireHdArtwork && it.image.contains("vimg.hitv.com/") })
+        assertTrue(mango.all { it.requireFullHdArtwork && it.image.contains("vimg.hitv.com/") })
+        assertTrue(youku.all { it.requireFullHdArtwork && it.fallbackImages.isEmpty() })
     }
 
     @Test fun brokenOrChangedSourcesProduceNoShelf() {
@@ -68,6 +69,17 @@ class ShelfWebFeedsTest {
             }}]}}
         """.trimIndent()
         assertEquals(listOf("Film"), ShelfWebFeeds.tencent(body).map { it.title })
+    }
+
+    @Test fun youkuTvArtworkNeverFallsBackToThePortraitField() {
+        val html = """<script>window.__INITIAL_DATA__ = {"moduleList":[{"typeName":"KU_FLIX_LUNBO_V2","components":[{"itemList":[
+            {"title":"Portrait only","action_type":"JUMP_TO_SHOW","img":"https://media.example/portrait.jpg"},
+            {"title":"Wide programme","action_type":"JUMP_TO_SHOW","hImg":"https://media.example/wide.jpg","img":"https://media.example/portrait.jpg"}
+        ]}]}]};</script>"""
+        val item = ShelfWebFeeds.youku(html).single()
+        assertEquals("Wide programme", item.title)
+        assertTrue(item.requireFullHdArtwork)
+        assertTrue(item.fallbackImages.isEmpty())
     }
 
     @Test fun tencentUsesOnlyReturnedProgrammeArtworkAndKeepsOneHdFallback() {
@@ -134,7 +146,7 @@ class ShelfWebFeedsTest {
         val item = ShelfWebFeeds.mango(root.toString()).single()
         assertEquals(valid.getString("name"), item.title)
         assertEquals(valid.getString("imgHUrl"), item.image)
-        assertTrue(item.requireHdArtwork)
+        assertTrue(item.requireFullHdArtwork)
         assertTrue(ShelfWebFeeds.mango("""{"code":200,"data":{"hitDocs":[{"title":"Old small image","imgUrlH":"https://1vimg.hitv.com/small.jpg"}]}}""").isEmpty())
     }
 
@@ -181,6 +193,7 @@ class ShelfWebFeedsTest {
         assertFalse(Shelf.has("com.gitvvideo"))
         assertEquals("tencent", Shelf.builtInPackages["com.ktcp.video"])
         assertEquals("mango", Shelf.builtInPackages["com.hunantv.market"])
+        assertEquals("mango", Shelf.builtInPackages["com.starcor.mango"])
         assertEquals("bilibili", Shelf.builtInPackages["com.tutu.myblbl"])
         assertEquals("douyu", Shelf.builtInPackages["com.douyu.xl.douyutv"])
         assertFalse(Shelf.builtInPackages.containsValue("quark"))
