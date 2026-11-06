@@ -101,7 +101,7 @@ object Guard {
         val script = listOf(
             "pm grant $p ${Manifest.permission.WRITE_SECURE_SETTINGS}",
             "pm grant $p android.permission.PACKAGE_USAGE_STATS",
-            "cmd notification allow_listener $p/$p.RevivalListener",
+            "cmd notification allow_listener ${ComponentName(ctx, RevivalListener::class.java).flattenToString()}",
             "appops set $p SYSTEM_ALERT_WINDOW allow",
             "appops set $p WRITE_SETTINGS allow",
             "appops set $p GET_USAGE_STATS allow",

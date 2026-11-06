@@ -15,6 +15,6 @@ internal object UiResolution {
         val height = decor.height.takeIf { it > 0 } ?: metrics.heightPixels
         val mode = activity.getSystemService(DisplayManager::class.java)?.getDisplay(Display.DEFAULT_DISPLAY)?.mode
         val output = mode?.let { "${it.physicalWidth}×${it.physicalHeight}" } ?: "?"
-        return "UI $width×$height · ${if (I18n.isChinese()) "输出" else "output"} $output"
+        return "UI $width×$height · ${if (I18n.isChinese()) "系统模式" else "reported mode"} $output"
     }
 }

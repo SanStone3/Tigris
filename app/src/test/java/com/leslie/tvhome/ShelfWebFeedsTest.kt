@@ -193,6 +193,7 @@ class ShelfWebFeedsTest {
         assertFalse(Shelf.has("com.gitvvideo"))
         assertEquals("tencent", Shelf.builtInPackages["com.ktcp.video"])
         assertEquals("mango", Shelf.builtInPackages["com.hunantv.market"])
+        assertEquals("mango", Shelf.builtInPackages["com.hunantv.license"])
         assertEquals("mango", Shelf.builtInPackages["com.starcor.mango"])
         assertEquals("bilibili", Shelf.builtInPackages["com.tutu.myblbl"])
         assertEquals("douyu", Shelf.builtInPackages["com.douyu.xl.douyutv"])

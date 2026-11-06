@@ -230,6 +230,7 @@ class Sheet(private val host: FrameLayout) {
         setLineSpacing(0f, 1.25f)
     }
     private var onDismiss: (() -> Unit)? = null
+    private var closing = false
     private var glass: UpdateGlass? = null
     private val glassSceneTick = object : Runnable {
         override fun run() {
@@ -268,10 +269,14 @@ class Sheet(private val host: FrameLayout) {
         message.visibility = if (m.isNullOrEmpty()) View.GONE else View.VISIBLE
     }
 
-    fun button(label: String, icon: Int? = null, keepOpen: Boolean = false, action: () -> Unit) = apply {
+    fun button(label: String, icon: Int? = null, keepOpen: Boolean = false,
+               afterDismiss: Boolean = false, action: () -> Unit) = apply {
         val b = PillButton(ctx, label, icon) {
-            if (!keepOpen) dismiss()
-            action()
+            if (!closing) {
+                if (keepOpen) action()
+                else if (afterDismiss) dismiss(action)
+                else { dismiss(); action() }
+            }
         }
         col.addView(b, LinearLayout.LayoutParams(ctx.dp(420), ctx.dp(52)).apply { topMargin = ctx.dp(12) })
     }
@@ -294,14 +299,17 @@ class Sheet(private val host: FrameLayout) {
 
     val isShowing get() = root.parent != null
 
-    fun dismiss() {
-        if (!isShowing) return
+    fun dismiss(after: (() -> Unit)? = null) {
+        if (!isShowing || closing) return
+        closing = true
         root.animate().alpha(0f).setDuration(140).withEndAction {
             host.removeView(root)
             root.removeCallbacks(glassSceneTick)
             glass?.close()
             glass = null
             onDismiss?.invoke()
+            // Home's dismissal callback removes the focus block before editing begins.
+            after?.invoke()
         }.start()
     }
 

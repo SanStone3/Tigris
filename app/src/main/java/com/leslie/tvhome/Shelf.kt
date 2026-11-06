@@ -49,6 +49,7 @@ object Shelf {
         "com.gitvdemo.video" to "iqiyi",
         "com.ktcp.video" to "tencent",
         "com.hunantv.market" to "mango",
+        "com.hunantv.license" to "mango",
         "com.starcor.mango" to "mango",
     )
 

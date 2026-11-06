@@ -5,5 +5,5 @@
     <string name="system_screensaver_settings_desc">Select the system screensaver again if no previous selection was recorded</string>
     <string name="system_screensaver_unavailable">Open your TV settings with the remote and select a system screensaver</string>
     <string name="ui_resolution_title">Actual desktop resolution</string>
-    <string name="ui_resolution_desc">App window and panel output are measured separately; a 4K wallpaper does not change firmware UI resolution</string>
+    <string name="ui_resolution_desc">App window and Android-reported display mode do not establish native panel pixels; a 4K wallpaper does not change firmware UI resolution</string>
 </resources>

@@ -667,7 +667,8 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         grid = RecyclerView(this).apply {
             clipChildren = false
             clipToPadding = false
-            itemAnimator?.changeDuration = 0
+            // TileCell owns its focus and move transforms; structural animations must not compete.
+            itemAnimator = null
             // Room below the last row so it can scroll up to the expanded position.
             setPadding(side, firstRowY, side, sh - expandedRowY - tileH)
             descendantFocusability = ViewGroup.FOCUS_AFTER_DESCENDANTS
@@ -691,8 +692,6 @@ class HomeActivity : Activity(), TileAdapter.Listener {
             }
         }
         grid.adapter = adapter
-        // Tiles update in place; the default cross-fade would swap in a second view and drop focus.
-        (grid.itemAnimator as? androidx.recyclerview.widget.SimpleItemAnimator)?.supportsChangeAnimations = false
         grid.addItemDecoration(object : RecyclerView.ItemDecoration() {
             override fun getItemOffsets(out: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
                 val col = parent.getChildAdapterPosition(view) % cols
@@ -1507,13 +1506,13 @@ class HomeActivity : Activity(), TileAdapter.Listener {
         app.folder?.let { manageFolder(it, pos); return }
         app.input?.let { i ->
             showSheet(Sheet(root).title(app.label).message(null)
-                .button(I18n.text(R.string.i18n_homeactivity_006)) { startMove(pos) }
+                .button(I18n.text(R.string.i18n_homeactivity_006), afterDismiss = true) { startMove(pos) }
                 .button(I18n.text(R.string.i18n_homeactivity_007)) { pinInput(i, false) }
                 .button(I18n.text(R.string.i18n_homeactivity_008)) {}, restoreFocusTo = pos)
             return
         }
         val s = Sheet(root).title(app.label).message(null)
-            .button(I18n.text(R.string.i18n_homeactivity_009)) { startMove(pos) }
+            .button(I18n.text(R.string.i18n_homeactivity_009), afterDismiss = true) { startMove(pos) }
             .button(I18n.text(R.string.i18n_homeactivity_010)) { chooseFolder(app) }
             .button(I18n.text(R.string.i18n_homeactivity_011)) {
                 prefs.hidden = prefs.hidden + app.pkg
