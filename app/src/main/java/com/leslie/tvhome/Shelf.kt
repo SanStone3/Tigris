@@ -13,7 +13,7 @@ import java.net.URL
  * Top Shelf content. Android TV's own channel API is empty on the TVs this
  * was written for, so a few apps are filled from public web APIs: Bilibili
  * popular videos (云视听小电视 and the third-party client com.tutu.myblbl)
- * and Douyu live rooms. Mango TV, Youku and Tencent use anonymous public
+ * and Douyu live rooms. Mango TV, Youku, iQIYI and Tencent use anonymous public
  * website recommendations. These feeds do not expose personal viewing history.
  *
  * Settings can also point one dock app at a JSON URL. That feed is cached
@@ -42,6 +42,8 @@ object Shelf {
         // Official TV APK manifests: pd.youku.com/CIBN and tv.qq.com.
         // The Mango package is also listed by Coocaa's public store API.
         "com.cibn.tv" to "youku",
+        // Verified in the TV APK linked by iqiyi.com/appstore.html.
+        "com.gitvdemo.video" to "iqiyi",
         "com.ktcp.video" to "tencent",
         "com.hunantv.market" to "mango",
     )
@@ -57,6 +59,9 @@ object Shelf {
             }
             "youku" -> Source(I18n.text(R.string.shelf_youku_source)) {
                 ShelfWebFeeds.youku(get(ShelfWebFeeds.YOUKU_URL, BUILTIN_JSON_BYTES).decodeToString())
+            }
+            "iqiyi" -> Source(I18n.text(R.string.shelf_iqiyi_source)) {
+                ShelfWebFeeds.iqiyi(get(ShelfWebFeeds.IQIYI_URL, BUILTIN_JSON_BYTES).decodeToString())
             }
             "tencent" -> Source(I18n.text(R.string.shelf_tencent_source)) {
                 ShelfWebFeeds.tencent(get(ShelfWebFeeds.TENCENT_URL, BUILTIN_JSON_BYTES, ShelfWebFeeds.tencentRequest()).decodeToString())
@@ -120,21 +125,45 @@ object Shelf {
         if (!ShelfLimits.isHttpUrl(url)) return null
         val dir = File(ctx.cacheDir, "shelf").apply { mkdirs() }
         val f = File(dir, Integer.toHexString(url.hashCode()) + ".jpg")
+        val checkedArtwork = IqiyiArtworkPolicy.isLandscapeCandidate(url)
+        val tmp = File(dir, f.name + ".part")
         if (!f.exists()) try {
-            val tmp = File(dir, f.name + ".part")
             tmp.writeBytes(get(url, ShelfLimits.MAX_IMAGE_BYTES))
             tmp.renameTo(f)
             // Keep the cache small: the newest 60 pictures.
             dir.listFiles()?.sortedByDescending { it.lastModified() }?.drop(60)?.forEach { it.delete() }
         } catch (e: Exception) {
+            if (checkedArtwork) { tmp.delete(); f.delete() }
             Log.w("Shelf", "image $url failed", e)
             return null
         }
-        return decodeCapped(f.path)
-            ?.let(::trimBars)
-            ?.let(::darken)
-            // Start the GPU upload now, off the frame that first shows it.
-            ?.also { it.prepareToDraw() }
+        var bitmap: Bitmap? = null
+        return runCatching {
+            val decoded = decodeCapped(f.path)
+            bitmap = decoded
+            if (decoded == null || checkedArtwork && !IqiyiArtworkPolicy.acceptsDimensions(decoded.width, decoded.height)) {
+                if (checkedArtwork) { tmp.delete(); f.delete() }
+                decoded?.recycle()
+                bitmap = null
+                return@runCatching null
+            }
+            val trimmed = trimBars(decoded)
+            if (trimmed !== decoded) decoded.recycle()
+            bitmap = trimmed
+            if (checkedArtwork && !IqiyiArtworkPolicy.acceptsDimensions(trimmed.width, trimmed.height)) {
+                tmp.delete(); f.delete(); trimmed.recycle(); bitmap = null
+                return@runCatching null
+            }
+            darken(trimmed).also {
+                bitmap = it
+                // Start the GPU upload now, off the frame that first shows it.
+                it.prepareToDraw()
+            }
+        }.onFailure {
+            bitmap?.takeUnless { it.isRecycled }?.recycle()
+            if (checkedArtwork) { tmp.delete(); f.delete() }
+            Log.w("Shelf", "decode $url failed", it)
+        }.getOrNull()
     }
 
     private fun fetchCustom(url: String): List<Item>? {

@@ -10,6 +10,7 @@ import org.json.JSONObject
  */
 internal object ShelfWebFeeds {
     const val YOUKU_URL = "https://www.youku.com/ku/webhome"
+    const val IQIYI_URL = "https://www.iqiyi.com/ranks1PCW/home"
     // The official /lib/2 page's bundle uses this route; its channel config names c2 “最热”.
     const val MANGO_URL = "https://pianku.api.mgtv.com/rider/list/pcweb/v3?platform=pcweb&channelId=2&pn=1&pc=12&hudong=1&_support=10000000&sort=c2"
     // v.qq.com's anonymous channel prefetch. Empty identity/cookie fields are intentional.
@@ -71,6 +72,38 @@ internal object ShelfWebFeeds {
             }
         }
         out
+    }
+
+    /** Public web ranking, not an authenticated or TV-specific recommendation list. */
+    fun iqiyi(html: String): List<Shelf.Item> = safely {
+        val rendered = html.replace(Regex("<script\\b[^>]*>.*?(?:</script\\s*>|$)|<!--.*?(?:-->|$)",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)), "")
+        val out = ArrayList<Shelf.Item>()
+        Regex("<a\\b([^>]*)>(.*?)</a\\s*>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .findAll(rendered).forEach { match ->
+                val attributes = match.groupValues[1]
+                val classes = attribute(attributes, "class").split(Regex("\\s+"))
+                if ("rvi__box" !in classes || "rvi__box1" !in classes) return@forEach
+                // Accept programme cards, not advertising or arbitrary page links.
+                val href = attribute(attributes, "href")
+                if (!Regex("(?:https?:)?//www\\.iqiyi\\.com/v_[A-Za-z0-9]+\\.html").matches(href)) return@forEach
+                val card = match.groupValues[2]
+                val picture = Regex("<picture\\b[^>]*>", RegexOption.IGNORE_CASE).find(card)?.value ?: return@forEach
+                val image = IqiyiArtworkPolicy.landscapeCandidate(attribute(picture, "id")) ?: return@forEach
+                add(out, classAttribute(card, "rvi__tit1", "title"), classAttribute(card, "rvi__des1", "title"), image)
+            }
+        out
+    }
+
+    private fun classAttribute(html: String, className: String, name: String): String =
+        Regex("<(?:div|p)\\b[^>]*>", RegexOption.IGNORE_CASE).findAll(html)
+            .firstOrNull { className in attribute(it.value, "class").split(Regex("\\s+")) }
+            ?.let { attribute(it.value, name) }.orEmpty()
+
+    private fun attribute(tag: String, name: String): String {
+        val value = Regex("(?<![A-Za-z0-9_:-])${Regex.escape(name)}\\s*=\\s*([\"'])(.*?)\\1",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).find(tag)?.groupValues?.get(2).orEmpty()
+        return value.replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
     }
 
     private fun add(out: MutableList<Shelf.Item>, title: String, meta: String, vararg pictures: String) {

@@ -32,6 +32,7 @@ class ShelfWebFeedsTest {
             assertTrue(ShelfWebFeeds.youku(body).isEmpty())
             assertTrue(ShelfWebFeeds.mango(body).isEmpty())
             assertTrue(ShelfWebFeeds.tencent(body).isEmpty())
+            assertTrue(ShelfWebFeeds.iqiyi(body).isEmpty())
         }
         assertTrue(ShelfWebFeeds.mango("""{"code":404,"data":{"hitDocs":[]}}""").isEmpty())
         assertTrue(ShelfWebFeeds.tencent("""{"ret":-1,"data":{"CardList":[]}}""").isEmpty())
@@ -89,9 +90,47 @@ class ShelfWebFeedsTest {
         assertFalse(request.toString().contains("auth_token"))
     }
 
+    @Test fun parsesRealPublicRankingCardsWithDocumentedLandscapeCandidates() {
+        val items = ShelfWebFeeds.iqiyi(fixture("iqiyi-ranks.html"))
+        assertEquals(listOf("小城良方", "折月亮", "伟大的长征"), items.map { it.title })
+        assertEquals("纯过日子，嘎嘎回血！", items.first().meta)
+        assertEquals(listOf(
+            "https://pic6.iqiyipic.com/image/20261102/1e/06/a_100692840_m_601_m8_1920_1080.jpg",
+            "https://pic8.iqiyipic.com/image/20261103/4d/10/a_100671203_m_601_m6_1920_1080.jpg",
+            "https://pic5.iqiyipic.com/image/20261009/f0/68/a_100688277_m_601_m6_1920_1080.jpg",
+        ), items.map { it.image })
+        assertTrue(items.all { IqiyiArtworkPolicy.isLandscapeCandidate(it.image) })
+    }
+
+    @Test fun rankingParserDoesNotReadAdvertisingScriptsOrUnknownArtwork() {
+        val card = """
+            <a class="rvi__box rvi__box1 rvi__box--hover" href="//www.iqiyi.com/v_example.html">
+              <picture id="//pic6.iqiyipic.com/image/20261102/1e/06/a_100692840_m_601_m8_260_360.jpg"></picture>
+              <div class="rvi__tit1" title="A &amp; B &quot;Film&quot;"></div><p title="Description" class="rvi__des1"></p>
+            </a>
+        """.trimIndent()
+        val html = "<script>throw new Error('never run'); '$card';</script>" +
+            "<!-- $card -->" + card.replace("rvi__box1", "advertisement") +
+            card.replace("//www.iqiyi.com/v_example.html", "https://ads.example/banner") +
+            card.replace("_260_360.jpg", ".jpg") + card
+        val item = ShelfWebFeeds.iqiyi(html).single()
+        assertEquals("A & B \"Film\"", item.title)
+        assertEquals("Description", item.meta)
+        assertTrue(ShelfWebFeeds.iqiyi("<script>'$card'").isEmpty())
+    }
+
+    @Test fun changedRankingMarkupReturnsNoItems() {
+        val fixture = fixture("iqiyi-ranks.html")
+        assertTrue(ShelfWebFeeds.iqiyi(fixture.replace("rvi__tit1", "renamed-title")).isEmpty())
+        assertTrue(ShelfWebFeeds.iqiyi(fixture.replace("<picture id=", "<picture data-id=")).isEmpty())
+        assertTrue(ShelfWebFeeds.iqiyi(fixture.replace("rvi__box1", "other-card")).isEmpty())
+    }
+
     @Test fun mapsOnlyVerifiedTelevisionPackagesAndPreservesExistingFeeds() {
         assertEquals("youku", Shelf.builtInPackages["com.cibn.tv"])
-        assertFalse(Shelf.has("com.gitvdemo.video"))
+        assertEquals("iqiyi", Shelf.builtInPackages["com.gitvdemo.video"])
+        assertTrue(Shelf.has("com.gitvdemo.video"))
+        assertFalse(Shelf.has("com.gitvvideo"))
         assertEquals("tencent", Shelf.builtInPackages["com.ktcp.video"])
         assertEquals("mango", Shelf.builtInPackages["com.hunantv.market"])
         assertEquals("bilibili", Shelf.builtInPackages["com.tutu.myblbl"])

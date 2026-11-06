@@ -12,8 +12,47 @@
     "manifestPackage": "com.gitvdemo.video",
     "anonymousRankApi": "https://mesh.if.iqiyi.com/portal/pcw/rankList/comRankList",
     "apiObserved": "HTTP 200, code 0, data.items []",
-    "enabled": false,
-    "reason": "Official ranking images were only 260x360 portraits. A final anonymous GET of https://www.iqiyi.com/ returned HTTP 200, 8932 bytes, without hero image data (image_url_pcw, bigPic, or 1920). No clear landscape source was verified; leave wallpaper visible. No transformed image URL was invented."
+    "enabled": true,
+    "reason": "Official supported 1920x1080 cover renditions were verified for current ranking items. Candidates are checked after download; missing, small or portrait images leave the wallpaper visible.",
+    "rankSource": "https://www.iqiyi.com/ranks1PCW/home",
+    "rankSourceType": "Public web ranking explicitly selected by the user for display beside the TV app; not a TV-specific or personalized ranking",
+    "imageSizingDocumentation": "http://dev.tv.iqiyi.com/cooperation/figureSize/",
+    "apkSha256": "b8709e436c6b2f8f36ee79dfe2ca996d6a5439b343bef57d97d3c1232392e674",
+    "tvRankProbe": {
+      "url": "https://itv.ptqy.gitv.tv/api/bi/rank/top",
+      "httpStatus": 401,
+      "code": "E001",
+      "message": "Invalid authorization"
+    },
+    "imageProbes": [
+      {
+        "title": "小城良方",
+        "url": "https://pic6.iqiyipic.com/image/20261102/1e/06/a_100692840_m_601_m8_1920_1080.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "width": 1920,
+        "height": 1080,
+        "bytes": 368132
+      },
+      {
+        "title": "折月亮",
+        "url": "https://pic8.iqiyipic.com/image/20261103/4d/10/a_100671203_m_601_m6_1920_1080.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "width": 1920,
+        "height": 1080,
+        "bytes": 229918
+      },
+      {
+        "title": "伟大的长征",
+        "url": "https://pic5.iqiyipic.com/image/20261009/f0/68/a_100688277_m_601_m6_1920_1080.jpg",
+        "httpStatus": 200,
+        "mime": "image/jpeg",
+        "width": 1920,
+        "height": 1080,
+        "bytes": 308608
+      }
+    ]
   },
   "tencent": {
     "page": "https://tv.qq.com/",
@@ -29,5 +68,17 @@
     "webBundle": "https://static.hitv.com/pc/25.0986699.js",
     "channelConfig": "https://pianku.api.mgtv.com/rider/config/channel/v1?channelId=2&platform=pcweb",
     "sort": "c2 = 最热"
+  },
+  "quarkTv": {
+    "officialPage": "https://pan.quark.cn/?page_info=1",
+    "officialConfig": "https://pan.quark.cn/api/client_version",
+    "apk": "https://pdds.quark.cn/download/stfile/rrxxswtt9rsvrtztk/QuarkCloudDrive_TV_2.9.1702_20260428162219_release.apk",
+    "manifestPackage": "com.quark.yun.tv",
+    "versionName": "2.9.1702",
+    "versionCode": 1702,
+    "apkSha256": "9f49002aefd00d72f248b59d2c6d84ec94860973ee00c16fee7306cfcec0ee39",
+    "recentPlaybackEnabled": false,
+    "staticFindings": "Exported MediaBrowser service returns no browser children for the ordinary caller strategy; the exported provider exposes internal running/network information, not a verified history list.",
+    "nextCheck": "On the actual TV, observe existing active media sessions during normal owner playback for optional title/artwork/sessionActivity. This does not query full cloud history. No TV was connected in the local investigation."
   }
 }

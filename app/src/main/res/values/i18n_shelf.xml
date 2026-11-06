@@ -8,6 +8,7 @@
     <string name="i18n_shelf_006">%1$.1fK</string>
     <string name="shelf_mango_source">Mango TV · Popular dramas</string>
     <string name="shelf_youku_source">Youku · Featured</string>
+    <string name="shelf_iqiyi_source">iQIYI · Public ranking</string>
     <string name="shelf_tencent_source">Tencent Video · Featured</string>
     <string name="shelf_custom_section">Top Shelf</string>
     <string name="shelf_custom_url">Custom source</string>
