@@ -45,6 +45,8 @@ object Shelf {
         // Official TV APK manifests: pd.youku.com/CIBN and tv.qq.com.
         // The Mango package is also listed by Coocaa's public store API.
         "com.cibn.tv" to "youku",
+        // Verified installed NetEase Cloud Music TV 1.2.10.
+        "com.netease.cloudmusic.tv" to "netease",
         // Verified in the TV APK linked by iqiyi.com/appstore.html.
         "com.gitvdemo.video" to "iqiyi",
         "com.ktcp.video" to "tencent",
@@ -64,6 +66,9 @@ object Shelf {
             }
             "youku" -> Source(I18n.text(R.string.shelf_youku_source)) {
                 ShelfWebFeeds.youku(get(ShelfWebFeeds.YOUKU_URL, BUILTIN_JSON_BYTES).decodeToString())
+            }
+            "netease" -> Source(I18n.text(R.string.shelf_netease_source)) {
+                ShelfNetease.topMv(get(ShelfNetease.TOP_MV_URL, BUILTIN_JSON_BYTES).decodeToString())
             }
             "iqiyi" -> Source(I18n.text(R.string.shelf_iqiyi_source)) {
                 ShelfWebFeeds.iqiyi(get(ShelfWebFeeds.IQIYI_URL, BUILTIN_JSON_BYTES).decodeToString())
@@ -160,7 +165,13 @@ object Shelf {
         val source = previewSource(pkg, custom) ?: return
         val key = builtInKey(pkg) ?: return
         val feed = synchronized(cache) { cache[key]?.feed?.takeIf { !it.failed && it.items == items } } ?: return
-        ShelfFeedPreview.write(File(ctx.cacheDir, "shelf"), source, ShelfFeedPreview.Snapshot(feed.at, items), isCurrent)
+        synchronized(artworkBudgetLock) {
+            ShelfFeedPreview.write(File(ctx.cacheDir, "shelf"), source, ShelfFeedPreview.Snapshot(feed.at, items), isCurrent)
+        }
+    }
+
+    internal fun maintainCache(ctx: Context, now: Long) = synchronized(artworkBudgetLock) {
+        synchronized(ShelfFeedPreview) { CacheMaintenanceFiles.cleanShelf(File(ctx.cacheDir, "shelf"), now) }
     }
 
     /** How long the current dock source can remain on screen before its cached feed expires. */
@@ -179,6 +190,7 @@ object Shelf {
 
     /** Downloads (or reads from the disk cache) an item's picture. */
     fun image(ctx: Context, item: Item, isCurrent: () -> Boolean = { true }): Bitmap? {
+        CacheMaintenance.runIfDue(ctx)
         for (url in ShelfLimits.artworkCandidates(item.image, item.fallbackImages)) {
             if (!isCurrent()) return null
             image(ctx, url, item.requireHdArtwork, item.requireFullHdArtwork, isCurrent)?.let { return it }
@@ -186,17 +198,23 @@ object Shelf {
         return null
     }
 
-    fun image(ctx: Context, url: String): Bitmap? = image(ctx, url, false, false) { true }
+    fun image(ctx: Context, url: String): Bitmap? {
+        CacheMaintenance.runIfDue(ctx)
+        return image(ctx, url, false, false) { true }
+    }
 
     /** Local preview must neither start a download nor wait for a download's per-URL lock. */
     fun cachedImage(ctx: Context, item: Item, isCurrent: () -> Boolean): Bitmap? {
         if (!item.requireFullHdArtwork) return null
         for (url in ShelfLimits.artworkCandidates(item.image, item.fallbackImages)) {
             if (!isCurrent()) return null
-            val file = File(File(ctx.cacheDir, "shelf"), Integer.toHexString(url.hashCode()) + ".jpg")
-            if (!file.isFile || file.length() > ShelfLimits.imageBytes(true)) continue
+            val file = File(File(ctx.cacheDir, "shelf"), ShelfDiskBudget.fileName(url))
+            val available = synchronized(artworkBudgetLock) {
+                if (!file.isFile || file.length() > ShelfLimits.imageBytes(true)) false
+                else { file.setLastModified(System.currentTimeMillis()); true }
+            }
+            if (!available) continue
             decodeArtwork(file, url, checkedArtwork = true, requireFullHd = true, isCurrent = isCurrent)?.let {
-                file.setLastModified(System.currentTimeMillis())
                 return it
             }
         }
@@ -210,7 +228,7 @@ object Shelf {
         val rejectionKey = "$requireFullHd:$checkedArtwork:$url"
         if (checkedArtwork && rejectedArtwork.contains(rejectionKey, System.currentTimeMillis())) return@artwork null
         val dir = File(ctx.cacheDir, "shelf").apply { mkdirs() }
-        val f = File(dir, Integer.toHexString(url.hashCode()) + ".jpg")
+        val f = File(dir, ShelfDiskBudget.fileName(url))
         val tmp = File(dir, f.name + ".part")
         val maxBytes = ShelfLimits.imageBytes(requireFullHd)
         // A shared URL previously cached by a Full HD feed does not raise a custom feed's budget.
@@ -224,9 +242,13 @@ object Shelf {
             // Only publishing and accounting share a global lock; unrelated downloads/decode can overlap.
             synchronized(artworkBudgetLock) {
                 if (download && !tmp.renameTo(f)) throw java.io.IOException("could not cache shelf artwork")
-                f.setLastModified(System.currentTimeMillis())
+                val now = System.currentTimeMillis()
+                f.setLastModified(now)
                 val files = dir.listFiles()?.filter { it.isFile && it.name.endsWith(".jpg") }.orEmpty()
-                val evictions = ShelfDiskBudget.evictions(files.map { ShelfDiskBudget.Entry(it.name, it.length(), it.lastModified()) }).toSet()
+                val protected = CacheMaintenanceFiles.shelfPreviewImages(dir, now) + f.name
+                val evictions = ShelfDiskBudget.evictions(files.map {
+                    ShelfDiskBudget.Entry(it.name, it.length(), it.lastModified())
+                }, protected).toSet()
                 files.filter { it.name in evictions }.forEach { it.delete() }
             }
         } catch (e: Exception) {

@@ -188,6 +188,7 @@ class ShelfWebFeedsTest {
 
     @Test fun mapsOnlyVerifiedTelevisionPackagesAndPreservesExistingFeeds() {
         assertEquals("youku", Shelf.builtInPackages["com.cibn.tv"])
+        assertEquals("netease", Shelf.builtInPackages["com.netease.cloudmusic.tv"])
         assertEquals("iqiyi", Shelf.builtInPackages["com.gitvdemo.video"])
         assertTrue(Shelf.has("com.gitvdemo.video"))
         assertFalse(Shelf.has("com.gitvvideo"))

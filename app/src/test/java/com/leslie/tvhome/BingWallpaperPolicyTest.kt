@@ -1,27 +1,157 @@
 package com.leslie.tvhome
 
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
+import org.json.JSONArray
+import org.json.JSONObject
+import java.awt.image.BufferedImage
+import java.io.File
+import java.time.Instant
+import java.time.ZoneId
+import javax.imageio.ImageIO
 
 class BingWallpaperPolicyTest {
+    @get:Rule val temporary = TemporaryFolder()
+    private val zone = ZoneId.of("Asia/Shanghai")
+    private val now = Instant.parse("2026-11-07T01:00:00Z").toEpochMilli()
+    private fun archiveImage(date: String, full: String, id: String) = JSONObject()
+        .put("startdate", date).put("fullstartdate", full).put("urlbase", "/th?id=OHR.$id")
+        .put("title", "Title $id").put("copyright", "Photographer $id")
+
+    private fun picture(name: String): File = File(temporary.root, name).also {
+        assertTrue(ImageIO.write(BufferedImage(16, 9, BufferedImage.TYPE_INT_RGB), "jpg", it))
+    }
+
     @Test fun qualityAndEffectiveAutoModeInvalidateOldQueue() {
         assertNotEquals(BingWallpaperPolicy.signature("compat", false), BingWallpaperPolicy.signature("uhd", true))
         assertNotEquals(BingWallpaperPolicy.signature("auto", false), BingWallpaperPolicy.signature("auto", true))
         assertNotEquals("", BingWallpaperPolicy.signature("compat", false))
     }
 
-    @Test fun overlappingArchiveWindowsAndRepeatedImagesAreDeduplicated() {
-        val dates = mutableSetOf<String>()
-        val images = mutableSetOf<String>()
-        val firstWindow = (1..8).map { "202611%02d".format(it) to "/th?id=OHR.Photo$it" }
-        val secondWindow = (8..15).map { "202611%02d".format(it) to "/th?id=OHR.Photo$it" }
-        val accepted = (firstWindow + secondWindow).filter { (date, base) ->
-            BingWallpaperPolicy.include(date, base, dates, images)
+    @Test fun currentSelectionAndRecentHistoryAreRequestedFromThePreferredChineseMarket() {
+        val urls = BingWallpaperPolicy.archiveUrls("20261107")
+        assertTrue(urls.first().startsWith("https://cn.bing.com/"))
+        assertTrue(urls.all { it.contains("idx=0&n=8&mkt=zh-CN") && it.contains("day=20261107") })
+        assertTrue(urls.none { it.contains("idx=7") })
+    }
+
+    @Test fun currentSelectionUsesItsLocalPublicationDateAndAlwaysPrecedesDeduplicatedHistory() {
+        // A real CN response on Nov 7 uses Nov 6's startdate and its 16:00 UTC publication instant.
+        val today = archiveImage("20261106", "202611061600", "Today")
+        val yesterday = archiveImage("20261105", "202611051600", "Yesterday")
+        val text = JSONObject().put("images", JSONArray().put(yesterday).put(today).put(today)
+            .put(archiveImage("20261105", "202611051600", "DuplicateDate"))
+            .put(archiveImage("20261104", "202611041600", "Yesterday"))).toString()
+        val selected = BingWallpaperPolicy.archive(text, now, zone)
+        assertEquals(listOf("20261106", "20261105"), selected.map { it.date })
+        assertEquals("/th?id=OHR.Today", selected.first().base)
+        assertEquals("Title Today — Photographer Today", selected.first().caption)
+        assertTrue(BingWallpaperPolicy.archive(JSONObject().put("images", JSONArray().put(yesterday)).toString(), now, zone).isEmpty())
+        assertTrue(BingWallpaperPolicy.archive(JSONObject().put("images", JSONArray()
+            .put(archiveImage("20261106/../other", "202611061600", "BadDate"))).toString(), now, zone).isEmpty())
+        assertTrue(BingWallpaperPolicy.archive("{broken", now, zone).isEmpty())
+    }
+
+    @Test fun localMidnightInvalidatesYesterdayEvenWhenItsQueueWasMadeSecondsAgo() {
+        val before = Instant.parse("2026-11-06T15:59:50Z").toEpochMilli()
+        val after = before + 20_000
+        assertEquals("20261106", BingWallpaperPolicy.sourceDay(before, zone))
+        assertEquals("20261107", BingWallpaperPolicy.sourceDay(after, zone))
+        assertTrue(BingWallpaperPolicy.isToday("20261106", before, zone))
+        assertFalse(BingWallpaperPolicy.isToday("20261106", after, zone))
+        assertFalse(BingWallpaperPolicy.isToday(null, after, zone))
+        assertFalse(BingWallpaperPolicy.isToday("", after, zone))
+        assertNotEquals("bing-v2:compat:hd", BingWallpaperPolicy.signature("compat", false))
+        assertNotEquals("bing-daily-v3:compat:hd", BingWallpaperPolicy.signature("compat", false))
+    }
+
+    @Test fun refreshThenForcedAdvanceOrPhotoFrameNextConsumesTodayBeforeHistoryOnlyOnce() {
+        val queue = JSONObject().put("sourceDay", BingWallpaperPolicy.sourceDay(now))
+            .put("todayReady", false).put("firstPending", false)
+            .put("items", JSONArray().put("today").put("history"))
+        assertFalse(BingWallpaperPolicy.ready(queue, now))
+        assertFalse(BingWallpaperPolicy.consumePriority(queue, now))
+        queue.put("todayReady", true).put("firstPending", true)
+        assertTrue(BingWallpaperPolicy.consumePriority(queue, now))
+        assertFalse(BingWallpaperPolicy.consumePriority(queue, now))
+        assertTrue(BingWallpaperPolicy.ready(queue, now))
+        assertFalse(BingWallpaperPolicy.ready(queue, now + 86_400_000L))
+        assertEquals(2, queue.getJSONArray("items").length())
+    }
+
+    @Test fun failedDownloadOrUndecodableReplacementKeepsTheOldShowingPictureAndCaption() {
+        val old = picture("yesterday.jpg")
+        val meta = JSONObject().put(old.name, "Yesterday")
+        File(temporary.root, "showing").writeText(old.name)
+        File(temporary.root, "meta.json").writeText(meta.toString())
+        File(temporary.root, "slot").writeText("existing-slot")
+        val failed = BingWallpaperPolicy.firstUsable<File>(listOf("new-uhd", "new-hd")) { error("network unavailable") }
+        assertFalse(BingWallpaperPolicy.publish(temporary.root, failed, meta, now) { ImageIO.read(it) != null })
+        val corrupt = File(temporary.root, "today.jpg").also { it.writeText("not an image") }
+        assertFalse(BingWallpaperPolicy.publish(temporary.root, corrupt, meta, now) { ImageIO.read(it) != null })
+        assertTrue(old.exists())
+        assertEquals(old.name, File(temporary.root, "showing").readText())
+        assertEquals("Yesterday", JSONObject(File(temporary.root, "meta.json").readText()).getString(old.name))
+        assertEquals("existing-slot", File(temporary.root, "slot").readText())
+    }
+
+    @Test fun verifiedNewJpegBecomesCurrentKeepsRecentHistoryAndRemovesExpiredCaptions() {
+        val old = picture("20261105-hd-1920x1080.jpg")
+        val older = picture("20261001-hd-1920x1080.jpg")
+        val today = picture("20261106-hd-1920x1080.jpg")
+        val part = File(temporary.root, "interrupted.jpg.part").also { it.writeText("partial") }
+        val meta = JSONObject().put(old.name, "Yesterday").put(older.name, "Archive").put(today.name, "Today")
+        File(temporary.root, "showing").writeText(old.name)
+        File(temporary.root, "slot").writeText("old-slot")
+        assertTrue(BingWallpaperPolicy.publish(temporary.root, today, meta, now) { ImageIO.read(it) != null })
+        assertTrue(old.exists())
+        assertFalse(older.exists())
+        assertTrue(today.exists())
+        assertTrue(part.exists())
+        assertEquals(setOf(today.name, old.name), temporary.root.listFiles()!!.filter { it.extension == "jpg" }.map { it.name }.toSet())
+        assertEquals(today.name, File(temporary.root, "showing").readText())
+        val storedMeta = JSONObject(File(temporary.root, "meta.json").readText())
+        assertEquals(setOf(today.name, old.name), storedMeta.keys().asSequence().toSet())
+        assertEquals("Today", storedMeta.getString(today.name))
+        assertEquals("old-slot", File(temporary.root, "slot").readText())
+        // Caching the next history candidate must not replace today's foreground selection.
+        assertTrue(BingWallpaperPolicy.publish(temporary.root, old, meta, now, makeCurrent = false) { ImageIO.read(it) != null })
+        assertEquals(today.name, File(temporary.root, "showing").readText())
+    }
+
+    @Test fun dateWindowAndQualityDedupUseRealDatesRatherThanRecentDownloadTimes() {
+        val hd = BingWallpaperPolicy.Cached("20261106-hd-1920x1080.jpg", now + 10)
+        val uhd = BingWallpaperPolicy.Cached("20261106-uhd-3840x2160.jpg", now - 100)
+        val expired = BingWallpaperPolicy.Cached("20261001-hd-1920x1080.jpg", now + 1000)
+        assertEquals(setOf(hd.name, expired.name), BingWallpaperPolicy.evictions(listOf(hd, uhd, expired), emptySet(), now, zone))
+        // Until a replacement is usable, an old/current quality variant keeps priority.
+        assertEquals(setOf(uhd.name), BingWallpaperPolicy.evictions(listOf(hd, uhd), setOf(hd.name), now, zone))
+        assertFalse(expired.name in BingWallpaperPolicy.evictions(listOf(expired), setOf(expired.name), now, zone))
+    }
+
+    @Test fun aValidatedSameDateQualityChangeKeepsTheNewFileReadyForDisplay() {
+        val uhd = picture("20261106-uhd-3840x2160.jpg")
+        val hd = picture("20261106-hd-1920x1080.jpg")
+        File(temporary.root, "showing").writeText(uhd.name)
+        val meta = JSONObject().put(uhd.name, "UHD").put(hd.name, "HD")
+        assertTrue(BingWallpaperPolicy.publish(temporary.root, hd, meta, now, makeCurrent = false) { ImageIO.read(it) != null })
+        assertTrue(hd.exists())
+        assertFalse(uhd.exists())
+        assertEquals(hd.name, File(temporary.root, "showing").readText())
+    }
+
+    @Test fun twelveRealDatesKeepAtMostTenAndEvictOldDatesDespiteTheirNewerDownloadTimes() {
+        val date = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val entries = (1L..12L).map { age -> BingWallpaperPolicy.Cached(
+            date.minusDays(age).format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE) + "-hd-1920x1080.jpg", now + age * 1000)
         }
-        assertEquals(15, accepted.size) // Fixture count, not a claim about Bing's daily response.
-        assertFalse(BingWallpaperPolicy.include("20261116", "/th?id=OHR.Photo1", dates, images))
-        assertFalse(BingWallpaperPolicy.include("20261101", "/th?id=OHR.Other", dates, images))
-        assertFalse(BingWallpaperPolicy.include("", "", dates, images))
+        val current = entries.last().name
+        val evicted = BingWallpaperPolicy.evictions(entries, setOf(current), now, zone)
+        assertEquals(10, entries.count { it.name !in evicted })
+        assertFalse(current in evicted)
+        assertEquals(setOf(entries[9].name, entries[10].name), evicted)
     }
 
     @Test fun cached1080CannotPreventAnUpgradeAndFallbackIsRetried() {

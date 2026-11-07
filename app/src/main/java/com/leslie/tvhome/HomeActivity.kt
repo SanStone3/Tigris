@@ -1932,6 +1932,7 @@ class HomeActivity : Activity(), TileAdapter.Listener {
 
     override fun onResume() {
         super.onResume()
+        io.execute { CacheMaintenance.runIfDue(applicationContext) }
         // Rebuild only after Settings changes column count; order/folders remain in Prefs.
         if (cols != prefs.dockColumns) { recreate(); return }
         val appearance = "${prefs.performanceProfile}:${prefs.extremeGlass}:${prefs.glassTint(isNight())}:${prefs.solidGlass(this)}:${isNight()}"

@@ -8,6 +8,7 @@
     <string name="i18n_shelf_006">%1$.1f万</string>
     <string name="shelf_mango_source">芒果公开精选</string>
     <string name="shelf_youku_source">优酷 · 热门推荐</string>
+    <string name="shelf_netease_source">网易云音乐 · MV热榜</string>
     <string name="shelf_iqiyi_source">爱奇艺公开热榜</string>
     <string name="shelf_tencent_source">腾讯视频 · 热门推荐</string>
     <string name="shelf_custom_section">顶部内容</string>

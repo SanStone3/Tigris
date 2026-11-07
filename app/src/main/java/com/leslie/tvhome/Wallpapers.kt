@@ -20,9 +20,11 @@ import java.net.URL
  * Background pictures, downloaded when they are about to be shown and dropped once old. A refresh
  * (about daily) only reads a source's list of pictures, a few kB of JSON, into a queue; one picture
  * is downloaded each time the home screen or the photo frame moves on ([advance], [next]). The
- * day's dozen used up, they go round the ones already here. Pictures older than [KEEP_DAYS] days
- * and any past [MAX_FILES] are deleted, keeping the newest [MIN_FILES]. Each source has its folder:
- * - [BING]: Bing's daily photos (cn.bing.com works without a VPN), unique archive results.
+ * day's dozen used up, they go round the ones already here. Automatic pictures cached for a day
+ * are deleted, keeping the selected source's current/offline picture within a shared disk budget.
+ * Each source has its folder:
+ * - [BING]: today's Bing selection first, then recent history, with at most ten cached pictures.
+ *   The displayed picture stays offline until a replacement has been downloaded and verified.
  * - [ANIME]: the month's most popular anime wallpapers on Wallhaven, SFW only; 360's and alcy's
  *   anime when Wallhaven can't be reached.
  * - [SCENERY], [FRESH], [ART]: picture feeds (360's wallpaper categories, Wallhaven, the
@@ -48,25 +50,36 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
     }
 
     /** The home screen's picture: the one [advance] last moved to, or the newest. */
-    fun current(): File? {
+    fun current(): File? = synchronized(BUDGET_LOCK) {
         val all = files()
         val name = runCatching { showFile.readText() }.getOrNull()
-        return all.firstOrNull { it.name == name } ?: all.firstOrNull()
+        all.firstOrNull { it.name == name } ?: all.firstOrNull()
     }
 
     /** Blocking. Moves the home screen on once every [minutes] (or now, with [force]); true if its picture changed. */
     fun advance(minutes: Int, force: Boolean = false): Boolean {
         val slot = System.currentTimeMillis() / (minutes.coerceAtLeast(1) * 60_000L)
+        if (source == BING && takeBingPriority() != null) {
+            synchronized(BUDGET_LOCK) { slotFile.writeText(slot.toString()) }
+            return true
+        }
         if (!force && runCatching { slotFile.readText().toLong() }.getOrNull() == slot) return false
         val before = current()
         val f = next(before) ?: return false
-        slotFile.writeText(slot.toString())
-        showFile.writeText(f.name)
+        synchronized(BUDGET_LOCK) {
+            slotFile.writeText(slot.toString())
+            showFile.writeText(f.name)
+        }
         return f != before
     }
 
     /** Blocking. The picture to show after [after]: a new one while the day's list lasts, else the next one here. */
     fun next(after: File?): File? {
+        if (source == BING) {
+            refresh()
+            takeBingPriority()?.let { return it }
+            if (!BingWallpaperPolicy.ready(readQueue(), System.currentTimeMillis())) return current()
+        }
         download()?.let { return it }
         val all = files()
         if (all.isEmpty()) return null
@@ -83,6 +96,7 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
      * if there is none yet, so a newly picked source shows something straight away.
      */
     fun refresh(force: Boolean = false): Boolean {
+        CacheMaintenance.runIfDue(ctx)
         if (source == MINE) return true
         var ok = true
         synchronized(lock) {
@@ -92,27 +106,26 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
                 BING -> BingWallpaperPolicy.signature(Prefs(ctx).wallQuality, MediaQuality.uhdWallpapers(ctx))
                 else -> ""
             }
-            val qualityChanged = source == BING && q?.optString("query") != signature
-            if (force || q == null || q.optString("query") != signature || System.currentTimeMillis() - q.optLong("made") > 20 * 3_600_000L) {
-                val now = System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            val newBingDay = source == BING && !BingWallpaperPolicy.isToday(q?.optString("sourceDay"), now)
+            if (force || q == null || q.optString("query") != signature || newBingDay || now - q.optLong("made") > 20 * 3_600_000L) {
                 // Bound failed or repeated manual API requests; cached photos remain usable.
-                if (source == WALLHAVEN && now - (ATTEMPTS[source] ?: 0L) < 60_000) ok = false
+                val attemptedAt = ATTEMPTS[source] ?: 0L
+                val throttled = now - attemptedAt < 60_000 &&
+                    (source != BING || !CacheMaintenancePolicy.due(attemptedAt, now))
+                if ((source == WALLHAVEN || source == BING) && throttled) ok = false
                 else {
                     ATTEMPTS[source] = now
                     ok = runCatching {
                         val next = list().put("query", signature)
                         if (source == WALLHAVEN) check(next.getJSONArray("items").length() > 0) { "No matching wallpapers" }
                         queueFile.writeText(next.toString())
-                        if (qualityChanged) {
-                            // The old image stays available offline, but cannot prevent a quality upgrade.
-                            download()?.let { showFile.writeText(it.name) }
-                            slotFile.delete()
-                        }
                     }.onFailure { Log.w("Wallpapers", "list failed", it) }.isSuccess
                 }
             }
         }
-        if (files().isEmpty()) download()
+        if (source == BING) download(priorityOnly = true)
+        else if (files().isEmpty()) download()
         return ok
     }
 
@@ -135,43 +148,34 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
     private fun readQueue(): JSONObject? = runCatching { JSONObject(queueFile.readText()) }.getOrNull()
 
     private fun list(): JSONObject {
-        val day = (System.currentTimeMillis() / 86_400_000L).toInt()
+        val now = System.currentTimeMillis()
+        val day = (now / 86_400_000L).toInt()
         val items = JSONArray()
         when (source) {
-            BING -> listBing(items)
+            BING -> listBing(items, now)
             WALLHAVEN -> listWallhaven(items)
             ANIME -> if (runCatching { listAnime(items, day) }.onFailure { Log.w("Wallpapers", "wallhaven", it) }.isFailure ||
                 items.length() == 0) listLinks(feeds(ANIME_BACKUP, day), items)
             CUSTOM -> listLinks(Prefs(ctx).customWallUrls.lines(), items)
             else -> listLinks(feeds(source, day), items)
         }
-        return JSONObject().put("made", System.currentTimeMillis()).put("taken", 0).put("items", items)
+        return JSONObject().put("made", now).put("taken", 0).put("items", items)
             .put("total", when (source) { CUSTOM -> Int.MAX_VALUE; BING -> items.length(); else -> PER_DAY })
+            .apply { if (source == BING) put("sourceDay", BingWallpaperPolicy.sourceDay(now)) }
     }
 
     private fun item(url: String, caption: String) = JSONObject().put("url", url).put("caption", caption)
 
-    private fun listBing(items: JSONArray) {
+    private fun listBing(items: JSONArray, now: Long) {
         val uhd = MediaQuality.uhdWallpapers(ctx)
-        val seenDates = mutableSetOf<String>()
-        val seenImages = mutableSetOf<String>()
-        // Archive windows overlap; the actual response determines how many unique photos exist.
-        for (idx in listOf(0, 7)) {
-            val json = get("https://cn.bing.com/HPImageArchive.aspx?format=js&idx=$idx&n=8&mkt=zh-CN").decodeToString()
-            val imgs = JSONObject(json).getJSONArray("images")
-            for (i in 0 until imgs.length()) {
-                val o = imgs.getJSONObject(i)
-                val date = o.optString("startdate")
-                val base = o.optString("urlbase")
-                if (!BingWallpaperPolicy.include(date, base, seenDates, seenImages)) continue
-                val title = o.optString("title")
-                val copy = o.optString("copyright")
-                val caption = if (title.isNotEmpty() && !copy.startsWith(title)) "$title — $copy" else copy
-                val urls = BingWallpaperPolicy.candidates(base, uhd)
-                items.put(item(urls.first(), caption).put("date", date)
-                    .put("quality", if (uhd) "uhd" else "hd")
-                    .apply { urls.getOrNull(1)?.let { put("fallback", it) } })
-            }
+        val images = BingWallpaperPolicy.firstUsable(BingWallpaperPolicy.archiveUrls(BingWallpaperPolicy.sourceDay(now))) {
+            BingWallpaperPolicy.archive(get(it).decodeToString(), now).takeIf { it.isNotEmpty() }
+        } ?: error("Today's Bing selection is unavailable")
+        images.forEach { image ->
+            val urls = BingWallpaperPolicy.candidates(image.base, uhd)
+            items.put(item(urls.first(), image.caption).put("date", image.date)
+                .put("quality", if (uhd) "uhd" else "hd")
+                .apply { urls.getOrNull(1)?.let { put("fallback", it) } })
         }
     }
 
@@ -211,10 +215,30 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
     }
 
     /** Blocking. Downloads the next picture of the day's list; null once it is used up or none works. */
-    private fun download(): File? = synchronized(lock) {
+    private fun download(priorityOnly: Boolean = false): File? = synchronized(lock) {
         val q = readQueue() ?: return null
         val items = q.optJSONArray("items") ?: return null
         val meta = runCatching { JSONObject(metaFile.readText()) }.getOrElse { JSONObject() }
+        if (source == BING) {
+            val now = System.currentTimeMillis()
+            if (!BingWallpaperPolicy.isToday(q.optString("sourceDay"), now)) return null
+            val first = !BingWallpaperPolicy.ready(q, now)
+            if ((!first && priorityOnly) || q.optBoolean("firstPending")) return null
+            val item = items.optJSONObject(0) ?: return null
+            val attemptedAt = ATTEMPTS["bing-image"] ?: 0L
+            if (now - attemptedAt < 60_000 && !CacheMaintenancePolicy.due(attemptedAt, now)) return null
+            ATTEMPTS["bing-image"] = now
+            val got = runCatching { takeBing(item, meta, makeCurrent = first) }.onFailure { Log.w("Wallpapers", "Bing download failed", it) }.getOrNull()
+            // Today's priority candidate stays retryable; a broken history item may be skipped.
+            if (got != null) {
+                items.remove(0)
+                q.put("taken", q.optInt("taken") + 1)
+                if (first) q.put("todayReady", true).put("firstPending", true)
+                prune(got)
+            } else if (!first) items.remove(0)
+            queueFile.writeText(q.toString())
+            return got
+        }
         var got: File? = null
         var tries = 0
         while (got == null && items.length() > 0 && q.optInt("taken") < q.optInt("total") && tries++ < 16) {
@@ -223,7 +247,7 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         }
         if (got != null) {
             q.put("taken", q.optInt("taken") + 1)
-            prune()
+            prune(got)
             val keep = files().map { it.name }.toSet()
             meta.keys().asSequence().toList().forEach { if (it !in keep) meta.remove(it) }
             metaFile.writeText(meta.toString())
@@ -238,9 +262,6 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
         if (id != null && (0 until ids.length()).any { ids.getString(it) == id }) return null
         val given = o.optString("name").ifEmpty { null }
         if (given != null && File(dir, given).exists()) return null
-        if (source == BING && o.has("date")) return takeBing(o, meta)
-        // Bing does not provide UHD for every date. A missing UHD falls back to the existing
-        // 1080p file; no stale failed download is cached.
         val bytes = runCatching { fetch(o.getString("url")).first }.getOrElse { error ->
             val fallback = o.optString("fallback")
             if (fallback.isEmpty()) throw error
@@ -260,29 +281,53 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
     }
 
     /** Candidate URLs do not prove resolution: name and caption describe the saved bitmap. */
-    private fun takeBing(o: JSONObject, meta: JSONObject): File? {
+    private fun takeBing(o: JSONObject, meta: JSONObject, makeCurrent: Boolean): File? {
         // A previous UHD fallback is retried on the next archive refresh, never treated as 4K.
-        files().firstOrNull {
-            BingWallpaperPolicy.canReuse(it.name, o.getString("date"), o.getString("quality"))
-        }?.let { return it }
+        synchronized(BUDGET_LOCK) {
+            files().firstOrNull {
+                BingWallpaperPolicy.canReuse(it.name, o.getString("date"), o.getString("quality"))
+            }?.let { if (publishBing(it, meta, makeCurrent)) return it }
+        }
+        // A missing UHD or undecodable response may still use today's 1080p image.
         val candidates = listOf(o.getString("url"), o.optString("fallback")).filter { it.isNotEmpty() }
         val decoded = BingWallpaperPolicy.firstUsable(candidates) { url ->
             fitScreen(fetch(url).first)
         } ?: return null
         val name = BingWallpaperPolicy.cacheName(o.getString("date"), o.getString("quality"), decoded.width, decoded.height)
         val resolution = "${decoded.width}×${decoded.height}"
-        if (!save(decoded, name)) return null
-        meta.put(name, o.optString("caption") + " · " + resolution)
-        return File(dir, name)
+        return synchronized(BUDGET_LOCK) {
+            if (!save(decoded, name)) return null
+            meta.put(name, o.optString("caption") + " · " + resolution)
+            File(dir, name).let { saved ->
+                if (publishBing(saved, meta, makeCurrent)) saved
+                else {
+                    if (runCatching { showFile.readText() }.getOrNull() != saved.name) saved.delete()
+                    null
+                }
+            }
+        }
     }
 
-    /** Old pictures go: past [KEEP_DAYS] days (keeping the newest [MIN_FILES]) or past [MAX_FILES]; never the one on screen. */
-    private fun prune() {
-        val showing = runCatching { showFile.readText() }.getOrNull()
-        val old = System.currentTimeMillis() - KEEP_DAYS * 86_400_000L
-        files().forEachIndexed { i, f ->
-            if (f.name != showing && (i >= MAX_FILES || (i >= MIN_FILES && f.lastModified() < old))) f.delete()
+    private fun publishBing(file: File, meta: JSONObject, makeCurrent: Boolean): Boolean =
+        BingWallpaperPolicy.publish(dir, file, meta, System.currentTimeMillis(), makeCurrent) { saved ->
+            decode(saved)?.let { it.recycle(); true } ?: false
         }
+
+    private fun takeBingPriority(): File? = synchronized(lock) {
+        val queue = readQueue()
+        val now = System.currentTimeMillis()
+        if (!BingWallpaperPolicy.consumePriority(queue, now)) return null
+        queueFile.writeText(queue.toString())
+        synchronized(BUDGET_LOCK) {
+            slotFile.writeText((now / (Prefs(ctx).wallMinutes.coerceAtLeast(1) * 60_000L)).toString())
+            current()
+        }
+    }
+
+    /** Enforce the same shared budget after publication, protecting the picture about to be used. */
+    private fun prune(downloaded: File) = synchronized(BUDGET_LOCK) {
+        if (source != MINE && source != CUSTOM) CacheMaintenanceFiles.cleanWallpapers(ctx.filesDir,
+            System.currentTimeMillis(), activeDirectory(ctx), setOf("${dir.name}/${downloaded.name}"))
     }
 
     /** A photo sent from a phone, for [MINE]. Returns its file name, or null if it isn't a picture. */
@@ -298,9 +343,11 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
 
     private fun save(bmp: Bitmap, name: String): Boolean {
         val tmp = File(dir, "$name.part")
-        tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-        bmp.recycle()
-        return tmp.renameTo(File(dir, name))
+        val written = try {
+            tmp.outputStream().use { bmp.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+        } finally { bmp.recycle() }
+        if (!written) { tmp.delete(); return false }
+        return synchronized(BUDGET_LOCK) { tmp.renameTo(File(dir, name)) }
     }
 
     fun delete(name: String) {
@@ -453,9 +500,7 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
     }
 
     companion object {
-        const val MAX_FILES = 16
-        private const val MIN_FILES = 4
-        private const val KEEP_DAYS = 3
+        const val MAX_FILES = CacheMaintenancePolicy.MAX_WALL_FILES_PER_SOURCE
         /** New pictures a day from a source with a list; random-picture links give [PER_LINK] each. */
         private const val PER_DAY = 12
         const val BING = "daily"
@@ -500,8 +545,21 @@ class Wallpapers(private val ctx: Context, private val source: String = BING) {
          * trying sources out doesn't pile up files. Photos and custom links are left alone.
          */
         fun trimExcept(ctx: Context, keep: String) {
-            for (s in SOURCES) if (s != keep && s != MINE && s != CUSTOM) Wallpapers(ctx, s).files().drop(1).forEach { it.delete() }
+            synchronized(BUDGET_LOCK) {
+                for (s in SOURCES) if (s != keep && s != MINE && s != CUSTOM) {
+                    val walls = Wallpapers(ctx, s)
+                    val current = walls.current()
+                    walls.files().filter { it != current }.forEach { it.delete() }
+                }
+            }
         }
+        internal fun maintainCaches(ctx: Context, now: Long) = synchronized(BUDGET_LOCK) {
+            CacheMaintenanceFiles.cleanWallpapers(ctx.filesDir, now, activeDirectory(ctx))
+        }
+        private fun activeDirectory(ctx: Context): String = sourceFor(Prefs(ctx).background).let {
+            if (it == BING) "wall" else "wall-$it"
+        }
+        private val BUDGET_LOCK = Any()
         private val ATTEMPTS = java.util.concurrent.ConcurrentHashMap<String, Long>()
         private val LOCKS = java.util.concurrent.ConcurrentHashMap<String, Any>()
         private const val PER_LINK = 6

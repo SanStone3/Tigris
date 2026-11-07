@@ -12,10 +12,11 @@ internal object ShelfFeedPreview {
     const val VERSION = 1
     const val MAX_BYTES = 128 * 1024
     const val MAX_AGE_MS = 7 * 24 * 60 * 60_000L
+    val SOURCES = setOf("bilibili", "youku", "netease")
     data class Snapshot(val at: Long, val items: List<Shelf.Item>)
 
     fun eligibleSource(kind: String?, custom: Boolean): String? =
-        kind?.takeIf { !custom && it in setOf("bilibili", "youku") }
+        kind?.takeIf { !custom && it in SOURCES }
 
     private fun file(dir: File, source: String) = File(dir, "feed-$source-v$VERSION.json")
 
@@ -172,12 +173,16 @@ internal object ShelfDiskBudget {
     const val MAX_BYTES = 120L * 1024 * 1024
     data class Entry(val name: String, val bytes: Long, val modified: Long)
 
-    fun evictions(entries: List<Entry>): List<String> {
+    fun fileName(url: String) = Integer.toHexString(url.hashCode()) + ".jpg"
+
+    fun evictions(entries: List<Entry>, protected: Set<String> = emptySet(), now: Long? = null): List<String> {
         var count = 0
         var bytes = 0L
-        return entries.sortedWith(compareByDescending<Entry> { it.modified }.thenBy { it.name }).mapNotNull {
+        return entries.sortedWith(compareByDescending<Entry> { it.name in protected }
+            .thenByDescending { it.modified }.thenBy { it.name }).mapNotNull {
             val size = it.bytes.coerceAtLeast(0)
-            if (count >= MAX_FILES || size > MAX_BYTES - bytes) it.name
+            val expired = now != null && it.name !in protected && CacheMaintenancePolicy.expired(it.modified, now)
+            if (expired || count >= MAX_FILES || size > MAX_BYTES - bytes) it.name
             else { count++; bytes += size; null }
         }
     }

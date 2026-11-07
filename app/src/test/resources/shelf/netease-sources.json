@@ -1,0 +1,31 @@
+{
+  "checkedAt": "2026-11-07T00:56:06Z",
+  "source": "https://music.163.com/api/mv/toplist?limit=12&offset=0",
+  "sourceType": "Official anonymous public MV chart, not a TV-specific or personalized ranking.",
+  "response": {"httpStatus": 200, "code": 200, "itemCount": 12},
+  "fixture": "netease-top-mv.json is reduced to chart metadata and picture IDs. No account cookies, device identity, keys or playback URLs were sent or retained.",
+  "imageSelection": "Use returned cover, upgrading HTTP to HTTPS only. Do not derive URLs from pic16v9 or append resize parameters. A pic16v9 label does not prove the original is landscape.",
+  "runtimePolicy": "requireFullHdArtwork=true reuses native >=1920x1080 and 16:9 ratio tolerance 0.01 checks before display; under-resolution and square originals are skipped.",
+  "refresh": "Use the existing live-feed cache policy. updateTime followed the request timestamp in this audit and is not established as the chart publication time or a daily update guarantee.",
+  "imageProbes": [
+    {"id":34796477,"title":"时光洪流","url":"https://p1.music.126.net/dncn4SnUw2YFB917eiNqLw==/109951173919953021.jpg","httpStatus":200,"width":1738,"height":978,"bytes":109415},
+    {"id":34813617,"title":"自由的你","url":"https://p1.music.126.net/4ATnVPONIs0kYdvAyxsl_A==/109951174195405164.jpg","httpStatus":200,"width":1633,"height":918,"bytes":130983},
+    {"id":34810579,"title":"一张相片","url":"https://p1.music.126.net/fqi6nqeI00_eGPk5uZSY2w==/109951174144804614.jpg","httpStatus":200,"width":2785,"height":1567,"bytes":296462},
+    {"id":34787197,"title":"中国人会飞","url":"https://p1.music.126.net/Ybd44ji92hIMIIaqxxPwnw==/109951173768959640.jpg","httpStatus":200,"width":3840,"height":2159,"bytes":531873},
+    {"id":34801736,"title":"蝶（Vlinder）（《三角洲行动》蝶-群星计划主题曲）","url":"https://p1.music.126.net/mxAw8OvI5sKuMA5MP4W89A==/109951174027632785.jpg","httpStatus":200,"width":2560,"height":1440,"bytes":179628},
+    {"id":34813607,"title":"花腐誕生","url":"https://p1.music.126.net/cMgvMO9WqDZq7Arg2AWEhg==/109951174195819481.jpg","httpStatus":200,"width":1139,"height":641,"bytes":57371},
+    {"id":34801749,"title":"汪洋与浩渺","url":"https://p1.music.126.net/_I35iDSxQGv0svBmLoKwPw==/109951174027805222.jpg","httpStatus":200,"width":2897,"height":1630,"bytes":222982},
+    {"id":34801321,"title":"少管我","url":"https://p1.music.126.net/3ut9Y_p5DTMFD0Li22r4Yw==/109951174017250989.jpg","httpStatus":200,"width":3840,"height":2159,"bytes":348202},
+    {"id":34813645,"title":"少年2.0","url":"https://p1.music.126.net/wKopYHuDTMo7FEQ6YHa-Dg==/109951174214350869.jpg","httpStatus":200,"width":3840,"height":2159,"bytes":468720},
+    {"id":34808372,"title":"薛定谔的雨","url":"https://p1.music.126.net/9owvJs3a2pN50SxeCPTPGQ==/109951174230850428.jpg","httpStatus":200,"width":2160,"height":2160,"bytes":168241},
+    {"id":34814872,"title":"渡口 (长征寻访回顾曲)","url":"https://p1.music.126.net/YupQir96Qt8czy7nBZobPA==/109951174216276927.jpg","httpStatus":200,"width":1920,"height":1080,"bytes":323352},
+    {"id":34814871,"title":"前路有光 (长征寻访出发曲)","url":"https://p1.music.126.net/7kVIWF6cjNYmfAhFqZlelw==/109951174216286511.jpg","httpStatus":200,"width":1920,"height":1080,"bytes":386468}
+  ],
+  "qualitySample": {"total": 12, "nativeFullHdLandscape": 8},
+  "rejectedAlternatives": [
+    {"source":"https://music.163.com/api/mv/first?limit=12","reason":"Anonymous HTTP200/code200 but sampled items date to 2024; not suitable evidence of current recommendations."},
+    {"source":"https://music.163.com/api/personalized/mv","reason":"Anonymous HTTP200/code200 but sampled items date to 2020; not used as current recommendations."}
+  ],
+  "packageCandidate": "com.netease.cloudmusic.tv",
+  "packageBoundary": "Public store metadata is corroborative only. Map only the package independently verified on the user's TV; this adapter performs no package launch or device operations."
+}
